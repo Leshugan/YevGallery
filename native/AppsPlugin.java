@@ -44,49 +44,41 @@ public class AppsPlugin extends Plugin {
     private boolean isImg(String n) { return n.toLowerCase().matches(".*\\.(" + IMG + ")$"); }
     private boolean isVid(String n) { return n.toLowerCase().matches(".*\\.(" + VID + ")$"); }
 
-    // ===== Рекурсивное сканирование медиа. hidden=false: пропускаем папки с .nomedia (и подпапки).
-    //       hidden=true: показываем ТОЛЬКО ветки, помеченные .nomedia. =====
+    // ===== Рекурсивное сканирование медиа за ОДИН проход.
+    //   .nomedia  — папка и все её подпапки скрыты (уходят в раздел «Скрытые»).
+    //   .nofolder — игнорируются только файлы этой папки, подпапки сканируются как обычно.
     @PluginMethod
     public void scanMedia(PluginCall call) {
-        boolean hidden = Boolean.TRUE.equals(call.getBoolean("hidden", false));
         try {
             File root = Environment.getExternalStorageDirectory();
-            JSArray arr = new JSArray();
-            walk(root, hidden, false, arr, 0);
+            JSArray vis = new JSArray();
+            JSArray hid = new JSArray();
+            walk(root, false, vis, hid, 0);
             JSObject ret = new JSObject();
-            ret.put("items", arr);
+            ret.put("items", vis);
+            ret.put("hidden", hid);
             ret.put("root", root.getAbsolutePath());
             call.resolve(ret);
         } catch (Exception e) { call.reject(e.getMessage()); }
     }
 
-    // insideNomedia — мы уже внутри скрытой ветки (родитель имел .nomedia)
-    private void walk(File dir, boolean wantHidden, boolean insideNomedia, JSArray out, int depth) {
+    private void walk(File dir, boolean insideNomedia, JSArray vis, JSArray hid, int depth) {
         if (dir == null || depth > 12) return;
         File[] kids = dir.listFiles();
         if (kids == null) return;
-        boolean hasNomedia = new File(dir, ".nomedia").exists();
-        boolean branchHidden = insideNomedia || hasNomedia;
-
-        // в обычном режиме скрытые ветки не сканируем вовсе
-        if (!wantHidden && branchHidden) return;
-
+        boolean branchHidden = insideNomedia || new File(dir, ".nomedia").exists();
+        boolean noFolder = new File(dir, ".nofolder").exists(); // игнор файлов только этой папки
         for (File k : kids) {
             String name = k.getName();
-            if (name.startsWith(".")) {                 // .thumbs, .trash, .nomedia-папки и пр.
-                if (!k.isDirectory()) continue;
-                // в папки с точкой не заходим (служебные)
-                continue;
-            }
+            if (name.startsWith(".")) continue;             // служебные/скрытые папки и файлы не трогаем
             if (k.isDirectory()) {
-                walk(k, wantHidden, branchHidden, out, depth + 1);
+                walk(k, branchHidden, vis, hid, depth + 1);
             } else {
-                boolean img = isImg(name), vid = isVid(name);
-                if (!img && !vid) continue;
-                // в режиме hidden показываем только файлы из скрытых веток
-                if (wantHidden && !branchHidden) continue;
-                JSObject o = new JSObject();
+                boolean vid = isVid(name);
+                if (!isImg(name) && !vid) continue;
+                if (!branchHidden && noFolder) continue;     // .nofolder — пропускаем файлы этой папки
                 File p = k.getParentFile();
+                JSObject o = new JSObject();
                 o.put("uri", "file://" + k.getAbsolutePath());
                 o.put("name", name);
                 o.put("size", k.length());
@@ -94,7 +86,7 @@ public class AppsPlugin extends Plugin {
                 o.put("video", vid);
                 o.put("bucketPath", p != null ? p.getAbsolutePath() : "");
                 o.put("bucketName", p != null ? p.getName() : "");
-                out.put(o);
+                (branchHidden ? hid : vis).put(o);
             }
         }
     }
@@ -153,7 +145,7 @@ public class AppsPlugin extends Plugin {
                 android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
                 o.inJustDecodeBounds = true;
                 android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-                int s = 1; while (o.outWidth / s > 320 || o.outHeight / s > 320) s *= 2;
+                int s = 1; while (o.outWidth / s > 960 || o.outHeight / s > 960) s *= 2;
                 android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
                 o2.inSampleSize = s;
                 b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
@@ -167,9 +159,9 @@ public class AppsPlugin extends Plugin {
             }
             if (b == null) { call.resolve(ret); return; }
             int mx = Math.max(b.getWidth(), b.getHeight());
-            if (mx > 256) { float sc = 256f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
+            if (mx > 512) { float sc = 512f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            b.compress(Bitmap.CompressFormat.JPEG, 82, out);
+            b.compress(Bitmap.CompressFormat.JPEG, 88, out);
             byte[] bytes = out.toByteArray();
             try { OutputStream fos = new FileOutputStream(cacheFile); fos.write(bytes); fos.close(); } catch (Exception ignored) {}
             ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP));
