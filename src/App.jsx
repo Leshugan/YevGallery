@@ -48,8 +48,12 @@ const I = {
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   stack: <><rect x="3" y="3" width="14" height="14" rx="2" /><path d="M7 21h12a2 2 0 0 0 2-2V9" /><circle cx="8" cy="8" r="1.6" /><path d="M3 14l3.5-3.5L11 15" /></>,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.5h.01" /></>,
-  gsize: <><rect x="3" y="3" width="8" height="13" rx="1.5" /><rect x="13" y="3" width="8" height="6" rx="1.5" /><rect x="13" y="12" width="8" height="9" rx="1.5" /><rect x="3" y="19" width="8" height="2.5" rx="1" /></>,
-  gclassic: <><rect x="3" y="3" width="5.5" height="5.5" rx="1" /><rect x="9.5" y="3" width="5.5" height="5.5" rx="1" /><rect x="16" y="3" width="5.5" height="5.5" rx="1" /><rect x="3" y="9.5" width="5.5" height="5.5" rx="1" /><rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" /><rect x="16" y="9.5" width="5.5" height="5.5" rx="1" /></>,
+  gsize: <><rect x="4" y="4" width="7" height="11" rx="1.4" /><rect x="13" y="4" width="7" height="6.5" rx="1.4" /><rect x="13" y="12.5" width="7" height="7.5" rx="1.4" /><rect x="4" y="17" width="7" height="3" rx="1.2" /></>,
+  gclassic: <>
+    <rect x="4" y="4" width="4.4" height="4.4" rx=".9" /><rect x="9.8" y="4" width="4.4" height="4.4" rx=".9" /><rect x="15.6" y="4" width="4.4" height="4.4" rx=".9" />
+    <rect x="4" y="9.8" width="4.4" height="4.4" rx=".9" /><rect x="9.8" y="9.8" width="4.4" height="4.4" rx=".9" /><rect x="15.6" y="9.8" width="4.4" height="4.4" rx=".9" />
+    <rect x="4" y="15.6" width="4.4" height="4.4" rx=".9" /><rect x="9.8" y="15.6" width="4.4" height="4.4" rx=".9" /><rect x="15.6" y="15.6" width="4.4" height="4.4" rx=".9" />
+  </>,
   chevR: <path d="M9 6l6 6-6 6" />,
 };
 const Svg = ({ d, size = 24 }) => (
@@ -61,11 +65,12 @@ const tq = []; let tActive = 0; const T_MAX = 6;
 const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(); tActive++; j().finally(() => { tActive--; tPump(); }); } };
 const tEnqueue = (j) => { tq.push(j); tPump(); };
 const thumbCache = new Map();
+const clampAR = (r) => { const n = Number(r); return (isFinite(n) && n > 0) ? Math.min(Math.max(n, 0.45), 2.4) : 1; };
 
 function Thumb({ uri, video, ar, square }) {
   const cached = thumbCache.get(uri);
   const [src, setSrc] = useState(() => (cached && cached.src) || "");
-  const [ratio, setRatio] = useState(() => (cached && cached.ar) || ar || 1);
+  const [ratio, setRatio] = useState(() => clampAR((cached && cached.ar) || ar || 1));
   const [vis, setVis] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -76,11 +81,11 @@ function Thumb({ uri, video, ar, square }) {
   }, []);
   useEffect(() => {
     if (!vis || src) return; let live = true;
-    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = (r && r.w && r.h) ? r.w / r.h : (ar || 1); thumbCache.set(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
+    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = clampAR((r && r.w > 0 && r.h > 0) ? r.w / r.h : 1); thumbCache.set(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
     return () => { live = false; };
   }, [vis, uri]);
   return (
-    <div ref={ref} style={{ width: "100%", aspectRatio: square ? "1" : String(ratio), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
+    <div ref={ref} style={{ width: "100%", aspectRatio: square ? "1" : String(clampAR(ratio)), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
       {src && src !== "x" && <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
       {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
       {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
@@ -257,7 +262,7 @@ export default function App() {
   /* ---- выделение ---- */
   const exitSel = () => { setSelMode(null); setSel(new Set()); };
   const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const startSel = (mode, id) => { buzz(15); setSelMode(mode); setSel(new Set([id])); };
+  const startSel = (mode, id) => { buzz(15); setGridMenu(false); setConfirm(null); setInfo(null); setSelMode(mode); setSel(new Set([id])); };
 
   /* ---- локальные мутации (без пересканирования) ---- */
   const removeUris = (uris) => { setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); };
@@ -562,7 +567,7 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
       onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
       onTouchEnd={() => clearTimeout(hold.current.t)}
       onTouchMove={() => clearTimeout(hold.current.t)}
-      style={{ position: "relative", breakInside: "avoid", WebkitColumnBreakInside: "avoid", marginBottom: square ? 0 : 3, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
+      style={{ position: "relative", breakInside: "avoid", WebkitColumnBreakInside: "avoid", marginBottom: square ? 0 : 3, aspectRatio: square ? "1" : undefined, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
       <Thumb uri={m.uri} video={m.video} square={square} />
       {selMode && (
         <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
