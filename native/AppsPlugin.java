@@ -49,17 +49,42 @@ public class AppsPlugin extends Plugin {
     //   .nofolder — игнорируются только файлы этой папки, подпапки сканируются как обычно.
     @PluginMethod
     public void scanMedia(PluginCall call) {
+        // в фоновом потоке — чтобы не блокировать UI на больших хранилищах
+        new Thread(() -> {
+            try {
+                File root = Environment.getExternalStorageDirectory();
+                JSArray vis = new JSArray();
+                JSArray hid = new JSArray();
+                walk(root, false, vis, hid, 0);
+                JSObject ret = new JSObject();
+                ret.put("items", vis);
+                ret.put("hidden", hid);
+                ret.put("root", root.getAbsolutePath());
+                call.resolve(ret);
+            } catch (Exception e) { call.reject(e.getMessage()); }
+        }).start();
+    }
+
+    // ===== Кэш списка медиа на диске (приватная папка приложения, без лимитов localStorage) =====
+    private File cacheFile() { return new File(getContext().getExternalFilesDir(null), "media_cache.json"); }
+
+    @PluginMethod
+    public void cacheGet(PluginCall call) {
         try {
-            File root = Environment.getExternalStorageDirectory();
-            JSArray vis = new JSArray();
-            JSArray hid = new JSArray();
-            walk(root, false, vis, hid, 0);
+            File f = cacheFile();
             JSObject ret = new JSObject();
-            ret.put("items", vis);
-            ret.put("hidden", hid);
-            ret.put("root", root.getAbsolutePath());
+            if (f.exists()) ret.put("data", new String(readAll(new FileInputStream(f)), "UTF-8"));
             call.resolve(ret);
-        } catch (Exception e) { call.reject(e.getMessage()); }
+        } catch (Exception e) { call.resolve(new JSObject()); }
+    }
+
+    @PluginMethod
+    public void cacheSet(PluginCall call) {
+        final String data = call.getString("data", "");
+        new Thread(() -> {
+            try { FileOutputStream o = new FileOutputStream(cacheFile()); o.write(data.getBytes("UTF-8")); o.close(); } catch (Exception ignored) {}
+            call.resolve(new JSObject());
+        }).start();
     }
 
     private void walk(File dir, boolean insideNomedia, JSArray vis, JSArray hid, int depth) {
