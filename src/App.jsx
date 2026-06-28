@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from "react";
 import { App as CapApp } from "@capacitor/app";
 import { registerPlugin, Capacitor } from "@capacitor/core";
 const Apps = registerPlugin("Apps");
@@ -6,7 +6,7 @@ const Apps = registerPlugin("Apps");
 /* ===== YevGallery — leshugan.yg ===== палитра/стиль YevFiles (шоколад) */
 
 const BG = "var(--bg)", BAR = "var(--bar)", ROW2 = "var(--row2)", ACC = "var(--acc)";
-const GOLD = "var(--gold)", RED = "var(--red)", TXT = "var(--txt)", SUB = "var(--sub)", LINE = "var(--line)";
+const RED = "var(--red)", TXT = "var(--txt)", SUB = "var(--sub)", LINE = "var(--line)";
 const THEMES = {
   dark:  { "--bg": "#1C140C", "--bar": "#2A2017", "--row2": "#2E251C", "--acc": "#EF6C00", "--accbg": "rgba(239,108,0,.18)", "--gold": "#F5A623", "--red": "#E05252", "--txt": "#F2EAE0", "--ink": "#E0D5C8", "--sub": "#B0A498", "--line": "#4A3A2A" },
   light: { "--bg": "#EEF1F4", "--bar": "#FFFFFF", "--row2": "#E4E8EC", "--acc": "#2F80ED", "--accbg": "rgba(47,128,237,.14)", "--gold": "#2F80ED", "--red": "#D14343", "--txt": "#1E2329", "--ink": "#3D4754", "--sub": "#6B7280", "--line": "#D3D8DE" },
@@ -16,9 +16,7 @@ const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { retur
 const loadMap = (k) => { try { return JSON.parse(ls.get(k)) || {}; } catch { return {}; } };
 const saveMap = (k, m) => ls.set(k, JSON.stringify(m));
 const buzz = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
-const baseName = (p) => { p = p.replace(/^file:\/\//, ""); return p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p; };
-
-const fmtCount = (n) => { const m10 = n % 10, m100 = n % 100; const w = (m10 === 1 && m100 !== 11) ? "элемент" : (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) ? "элемента" : "элементов"; return n + " " + w; };
+const baseName = (p) => { p = String(p).replace(/^file:\/\//, ""); return p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p; };
 
 const I = {
   back: <path d="M15 18l-6-6 6-6" />,
@@ -27,7 +25,6 @@ const I = {
   trash: <><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /></>,
   share: <><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></>,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>,
-  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
   img: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></>,
   video: <><rect x="2" y="5" width="14" height="14" rx="2" /><path d="M16 10l6-3v10l-6-3z" /></>,
   play: <><circle cx="12" cy="12" r="10" /><path d="M10 8.5l6 3.5-6 3.5z" fill="currentColor" stroke="none" /></>,
@@ -47,55 +44,53 @@ const Svg = ({ d, size = 24 }) => (
 );
 
 /* ===== ленивые превью с ограничением параллелизма ===== */
-const tq = []; let tActive = 0; const T_MAX = 4;
+const tq = []; let tActive = 0; const T_MAX = 6;
 const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(); tActive++; j().finally(() => { tActive--; tPump(); }); } };
 const tEnqueue = (j) => { tq.push(j); tPump(); };
+const thumbCache = new Map();
 
-function Thumb({ uri, video, size, radius = 8 }) {
-  const [src, setSrc] = useState("");
+function Thumb({ uri, video }) {
+  const [src, setSrc] = useState(() => thumbCache.get(uri) || "");
   const [vis, setVis] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
+    if (src) return;
     const el = ref.current; if (!el) return;
-    const io = new IntersectionObserver((ents) => { ents.forEach((e) => { if (e.isIntersecting) { setVis(true); io.disconnect(); } }); }, { rootMargin: "300px" });
+    const io = new IntersectionObserver((ents) => { ents.forEach((e) => { if (e.isIntersecting) { setVis(true); io.disconnect(); } }); }, { rootMargin: "400px" });
     io.observe(el); return () => io.disconnect();
   }, []);
   useEffect(() => {
     if (!vis || src) return; let live = true;
-    tEnqueue(() => Apps.thumb({ uri }).then((r) => { if (live) setSrc(r && r.thumb ? r.thumb : "x"); }).catch(() => { if (live) setSrc("x"); }));
+    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; thumbCache.set(uri, v); if (live) setSrc(v); }).catch(() => { if (live) setSrc("x"); }));
     return () => { live = false; };
   }, [vis, uri]);
   return (
-    <div ref={ref} style={{ width: "100%", height: size, background: ROW2, borderRadius: radius, overflow: "hidden", position: "relative" }}>
+    <div ref={ref} style={{ width: "100%", aspectRatio: "1", background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
       {src && src !== "x" && <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
-      {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={Math.min(34, size / 3)} /></div>}
-      {video && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-          <span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={Math.min(40, size / 2.4)} /></span>
-        </div>
-      )}
+      {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
+      {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
     </div>
   );
 }
 
 /* ===== классификация спец-альбомов ===== */
-function classify(bucketPath, bucketName) {
-  const p = (bucketPath || "").toLowerCase();
-  const n = (bucketName || "");
+function classify(p, n) {
+  p = (p || "").toLowerCase(); n = n || "";
   if (p.includes("whatsapp") && p.includes("image")) return { key: "whatsapp", name: "WhatsApp" };
   if (p.includes("telegram")) return { key: "telegram", name: "Telegram" };
-  if (n.toLowerCase() === "screenshots" || n.toLowerCase() === "скриншоты" || p.includes("/screenshots")) return { key: "screenshots", name: "Скриншоты" };
+  if (n.toLowerCase() === "screenshots" || p.includes("/screenshots")) return { key: "screenshots", name: "Скриншоты" };
   if (p.includes("/dcim/camera") || n === "Camera") return { key: "camera", name: "Камера" };
   if (n === "Pictures") return { key: "pictures", name: "Pictures" };
   return null;
 }
-const SPEC_ORDER = ["telegram", "whatsapp", "pictures", "camera", "screenshots"]; // последний = низ-право
-const SPEC_NAME = { telegram: "Telegram", whatsapp: "WhatsApp", pictures: "Pictures", camera: "Камера", screenshots: "Скриншоты" };
+// порядок справа-налево по нижнему ряду: первый = правый нижний угол
+const SPEC_ORDER = ["screenshots", "camera", "pictures", "whatsapp", "telegram"];
+const SPEC_NAME = { screenshots: "Скриншоты", camera: "Камера", pictures: "Pictures", whatsapp: "WhatsApp", telegram: "Telegram" };
 
-function buildAlbums(items) {
-  const map = new Map(); // key -> {key,name,special,paths:Set,items:[]}
+function buildAlbums(items, isHidden) {
+  const map = new Map();
   for (const it of items) {
-    const sp = classify(it.bucketPath, it.bucketName);
+    const sp = isHidden ? null : classify(it.bucketPath, it.bucketName);
     const key = sp ? sp.key : it.bucketPath;
     const name = sp ? sp.name : (it.bucketName || baseName(it.bucketPath));
     let a = map.get(key);
@@ -103,20 +98,29 @@ function buildAlbums(items) {
     a.paths.add(it.bucketPath); a.items.push(it);
   }
   for (const a of map.values()) a.items.sort((x, y) => y.mtime - x.mtime);
-  // запомнить пути спец-альбомов, чтобы пустые не исчезали
+  if (isHidden) return [...map.values()].sort((x, y) => x.items[0].mtime - y.items[0].mtime);
+  // спец-альбомы помним, чтобы пустые (после удаления фото) не исчезали
   const seen = loadMap(SPECKEY);
   for (const k of SPEC_ORDER) { const a = map.get(k); if (a) seen[k] = [...a.paths]; }
   saveMap(SPECKEY, seen);
-  // обычные альбомы — новые сверху (по свежести)
-  const others = [...map.values()].filter((a) => !a.special).sort((x, y) => y.items[0].mtime - x.items[0].mtime);
-  // спец-альбомы — снизу, в фикс. порядке; пустые подставляем из seen
+  // обычные — по возрастанию свежести (новые окажутся выше), спец — в начале (правый нижний угол)
+  const others = [...map.values()].filter((a) => !a.special).sort((x, y) => x.items[0].mtime - y.items[0].mtime);
   const specials = [];
   for (const k of SPEC_ORDER) {
     let a = map.get(k);
     if (!a && seen[k] && seen[k].length) a = { key: k, name: SPEC_NAME[k], special: true, paths: new Set(seen[k]), items: [] };
     if (a) specials.push(a);
   }
-  return [...others, ...specials];
+  return [...specials, ...others]; // index 0 = правый нижний угол
+}
+
+// раскладка «привязки к правому нижнему углу»: seq[0] -> низ-право, дальше влево и вверх; пустые ячейки сверху-слева
+function brCells(seq, cols) {
+  const rows = Math.max(1, Math.ceil(seq.length / cols));
+  const total = rows * cols;
+  const cells = new Array(total).fill(null);
+  for (let i = 0; i < seq.length; i++) cells[total - 1 - i] = seq[i];
+  return cells;
 }
 
 export default function App() {
@@ -132,36 +136,39 @@ export default function App() {
   const [trashItems, setTrashItems] = useState([]);
 
   const [section, setSection] = useState("albums"); // albums | all | video | trash | hidden
-  const [album, setAlbum] = useState(null);
-  const [viewer, setViewer] = useState(null);       // { items, idx, trash }
+  const [albumKey, setAlbumKey] = useState(null);
+  const [viewer, setViewer] = useState(null);
   const [bar, setBar] = useState(true);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
 
-  const [selMode, setSelMode] = useState(null);      // null | 'photo' | 'album'
+  const [selMode, setSelMode] = useState(null); // null | 'photo' | 'album'
   const [sel, setSel] = useState(() => new Set());
-  const [confirm, setConfirm] = useState(null);      // {text, sub, onYes}
+  const [confirm, setConfirm] = useState(null);
 
   const cfs = (u) => { try { return Capacitor.convertFileSrc(u); } catch { return u; } };
+  const scrollRef = useRef(null);
+  const vTouch = useRef(null);
 
-  /* ---- доступ ---- */
+  const albums = useMemo(() => buildAlbums(media, false), [media]);
+  const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, true), [hiddenItems]);
+  const allPhotos = useMemo(() => media.filter((m) => !m.video).sort((a, b) => b.mtime - a.mtime), [media]);
+  const allVideos = useMemo(() => media.filter((m) => m.video).sort((a, b) => b.mtime - a.mtime), [media]);
+  const albumPool = section === "hidden" ? hiddenAlbums : albums;
+  const album = albumKey ? albumPool.find((a) => a.key === albumKey) : null;
+
+  /* ---- доступ + сканирование ---- */
   const checkAccess = useCallback(async () => { try { const r = await Apps.hasAllFiles(); setAllFiles(!!r.granted); return !!r.granted; } catch { setAllFiles(true); return true; } }, []);
-
-  /* ---- сканирование ---- */
   const scan = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await Apps.scanMedia({ hidden: false });
+      const r = await Apps.scanMedia();
       if (r.root) setRoot(r.root);
       setMedia(r.items || []);
-    } catch { setMedia([]); }
+      setHiddenItems(r.hidden || []);
+    } catch { setMedia([]); setHiddenItems([]); }
     setLoading(false);
   }, []);
-
-  const scanHidden = useCallback(async () => {
-    try { const r = await Apps.scanMedia({ hidden: true }); setHiddenItems(r.items || []); } catch { setHiddenItems([]); }
-  }, []);
-
   const loadTrash = useCallback(async () => {
     const meta = loadMap(TRASHMETA);
     try {
@@ -172,17 +179,21 @@ export default function App() {
     } catch { setTrashItems([]); }
   }, [TRASH]);
 
-  useEffect(() => {
-    (async () => { const ok = await checkAccess(); await scan(); if (ok) { /* ничего */ } })();
-  }, []);
-
+  useEffect(() => { (async () => { await checkAccess(); await scan(); })(); }, []);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
-
-  // обновление при возврате в приложение (выдали доступ / вернулись из обоев)
   useEffect(() => {
-    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) { checkAccess().then((ok) => { if (ok) scan(); }); } });
+    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok) scan(); }); });
     return () => { sub.then((s) => s.remove()).catch(() => {}); };
   }, [checkAccess, scan]);
+
+  // если открытый альбом опустел/пропал — выходим к списку
+  useEffect(() => { if (albumKey && !album) setAlbumKey(null); }, [albumKey, album]);
+
+  // привязка к правому нижнему углу: после рендера прокручиваем вниз
+  useLayoutEffect(() => {
+    const el = scrollRef.current; if (!el) return;
+    if (section === "albums" || section === "hidden" || albumKey) el.scrollTop = el.scrollHeight;
+  }, [section, albumKey, albums, hiddenAlbums, media]);
 
   /* ---- системная кнопка «назад» ---- */
   useEffect(() => {
@@ -190,8 +201,7 @@ export default function App() {
       if (confirm) { setConfirm(null); return; }
       if (viewer) { setViewer(null); return; }
       if (selMode) { exitSel(); return; }
-      if (album) { setAlbum(null); return; }
-      if (section === "hidden") { setSection("albums"); return; }
+      if (albumKey) { setAlbumKey(null); return; }
       if (section !== "albums") { setSection("albums"); return; }
       CapApp.exitApp();
     });
@@ -200,16 +210,8 @@ export default function App() {
 
   /* ---- выделение ---- */
   const exitSel = () => { setSelMode(null); setSel(new Set()); };
-  const toggleSel = (id) => { setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const startSel = (mode, id) => { buzz(15); setSelMode(mode); setSel(new Set([id])); };
-
-  /* ---- наборы данных секций ---- */
-  const allPhotos = media.filter((m) => !m.video).sort((a, b) => b.mtime - a.mtime);
-  const allVideos = media.filter((m) => m.video).sort((a, b) => b.mtime - a.mtime);
-  const albums = buildAlbums(media);
-  const hiddenAlbums = buildAlbums(hiddenItems);
-
-  const albumItems = (a) => a ? a.items : [];
 
   /* ---- корзина ---- */
   const moveToTrash = async (items) => {
@@ -230,92 +232,90 @@ export default function App() {
     for (const it of items) { try { await Apps.delete({ uri: it.uri }); delete meta[baseName(it.uri)]; } catch {} }
     saveMap(TRASHMETA, meta);
   };
+  const refreshAll = async () => { await scan(); await loadTrash(); };
 
-  const refreshAll = async () => { await scan(); await loadTrash(); if (section === "hidden") await scanHidden(); };
+  /* ---- подтверждение + действия ---- */
+  const ask = (text, sub, onYes) => setConfirm({ text, sub, onYes: async () => { setConfirm(null); await onYes(); } });
+  const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
 
-  /* ---- действия над выбранными фото ---- */
-  const selPhotoList = (pool) => pool.filter((m) => sel.has(m.uri));
-  const doDeletePhotos = async (pool) => { const items = selPhotoList(pool); exitSel(); await moveToTrash(items); await refreshAll(); };
-  const doSharePhotos = (pool) => { const items = selPhotoList(pool); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
+  const doDeletePhotos = () => {
+    const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return;
+    ask(items.length > 1 ? "Удалить " + items.length + " фото?" : "Удалить файл?", items.length === 1 ? items[0].name : "Будут перемещены в корзину", async () => { exitSel(); await moveToTrash(items); await refreshAll(); });
+  };
+  const doSharePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
   const doRestore = async () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); await restoreTrash(items); await refreshAll(); };
-  const doDeleteForever = async () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); await deleteForever(items); await refreshAll(); };
-
-  /* ---- действия над выбранными альбомами ---- */
-  const selAlbumList = (pool) => pool.filter((a) => sel.has(a.key));
-  const doHideAlbums = async (pool) => {
-    const list = selAlbumList(pool); exitSel();
-    for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: true }); } catch {} }
-    await refreshAll();
+  const doDeleteForever = () => {
+    const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return;
+    ask("Удалить навсегда?", items.length + " файл(ов) нельзя будет восстановить", async () => { exitSel(); await deleteForever(items); await refreshAll(); });
   };
-  const doShowAlbums = async (pool) => {
-    const list = selAlbumList(pool); exitSel();
-    for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: false }); } catch {} }
-    await scanHidden(); await scan();
-  };
-  const doDeleteAlbums = async (pool) => {
-    const list = selAlbumList(pool); exitSel();
+  const doHideAlbums = async () => { const list = albums.filter((a) => sel.has(a.key)); exitSel(); for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: true }); } catch {} } await refreshAll(); };
+  const doShowAlbums = async () => { const list = hiddenAlbums.filter((a) => sel.has(a.key)); exitSel(); for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: false }); } catch {} } await refreshAll(); };
+  const doDeleteAlbums = () => {
+    const pool = section === "hidden" ? hiddenAlbums : albums;
+    const list = pool.filter((a) => sel.has(a.key)); if (!list.length) return;
     let all = []; for (const a of list) all = all.concat(a.items);
-    await moveToTrash(all); await refreshAll();
+    ask("Удалить выбранные альбомы?", "Все фото (" + all.length + ") уйдут в корзину, папки останутся", async () => { exitSel(); await moveToTrash(all); await refreshAll(); });
   };
 
   /* ---- вьювер ---- */
   const openViewer = (items, idx, trash) => { setViewer({ items, idx, trash: !!trash }); setBar(true); setDragX(0); };
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
-  const vTouch = useRef(null);
-  const viewerDeleteOne = async () => {
-    if (!vCur) return;
-    if (viewer.trash) { await deleteForever([vCur]); } else { await moveToTrash([vCur]); }
-    setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
-    await refreshAll();
+  const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
+  const viewerDeleteOne = () => {
+    if (!vCur) return; const cur = vCur, isTrash = viewer.trash;
+    ask("Удалить файл?", cur.name, async () => { if (isTrash) await deleteForever([cur]); else await moveToTrash([cur]); removeFromViewer(); await refreshAll(); });
   };
-  const viewerRestoreOne = async () => { if (!vCur) return; await restoreTrash([vCur]); setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; }); await refreshAll(); };
+  const viewerRestoreOne = async () => { if (!vCur) return; const cur = vCur; await restoreTrash([cur]); removeFromViewer(); await refreshAll(); };
 
-  /* ---- переключение секций ---- */
+  /* ---- секции ---- */
   const trashTapRef = useRef(0);
   const goSection = (s) => {
-    if (s === "trash") { const now = Date.now(); if (now - trashTapRef.current < 350) { trashTapRef.current = 0; setConfirm({ text: "Очистить корзину?", sub: "Все файлы будут удалены безвозвратно", onYes: async () => { setConfirm(null); await deleteForever(trashItems); await refreshAll(); } }); return; } trashTapRef.current = now; loadTrash(); }
-    exitSel(); setAlbum(null); setSection(s);
+    if (s === "trash") {
+      const now = Date.now();
+      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", "Все файлы будут удалены безвозвратно", async () => { await deleteForever(trashItems); await refreshAll(); }); return; }
+      trashTapRef.current = now; loadTrash();
+    }
+    exitSel(); setAlbumKey(null); setSection(s);
   };
-  const enterHidden = async () => { buzz(20); exitSel(); setAlbum(null); await scanHidden(); setSection("hidden"); };
+  const enterHidden = () => { buzz(20); exitSel(); setAlbumKey(null); setSection("hidden"); };
 
   /* ================= РЕНДЕР ================= */
   const headerTitle = album ? album.name : section === "albums" ? "Альбомы" : section === "all" ? "Все" : section === "video" ? "Видео" : section === "trash" ? "Корзина" : "Скрытые";
-
   const SECS = [
     { id: "trash", icon: I.trash, label: "Корзина" },
     { id: "video", icon: I.video, label: "Видео" },
     { id: "all", icon: I.grid, label: "Все" },
     { id: "albums", icon: I.albums, label: "Альбомы" },
   ];
+  const showNav = !selMode && !album && section !== "hidden";
 
   return (
     <div style={{ ...T, position: "fixed", inset: 0, background: BG, color: TXT, fontFamily: "system-ui, Roboto, sans-serif", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <style>{`html,body{margin:0;background:${T["--bg"]}}* {box-sizing:border-box;-webkit-tap-highlight-color:transparent}`}</style>
+      <style>{`html,body{margin:0;background:${T["--bg"]}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}`}</style>
 
-      {/* ===== header ===== */}
-      <div style={{ paddingTop: "env(safe-area-inset-top)", background: BAR, borderBottom: "1px solid " + LINE, flexShrink: 0 }}>
-        <div style={{ height: 52, display: "flex", alignItems: "center", gap: 8, padding: "0 8px" }}>
+      {/* ===== header (полностью закруглённая панель) ===== */}
+      <div style={{ paddingTop: "env(safe-area-inset-top)", flexShrink: 0 }}>
+        <div style={{ height: 52, margin: "8px 8px 6px", borderRadius: 26, background: BAR, display: "flex", alignItems: "center", gap: 8, padding: "0 6px 0 16px", boxShadow: "0 1px 0 rgba(255,255,255,.05) inset, 0 4px 16px -6px rgba(0,0,0,.4)" }}>
           {selMode ? (
             <>
-              <button onClick={exitSel} style={btnIcon}><Svg d={I.x} size={22} /></button>
-              <span style={{ flex: 1, fontSize: 16, fontWeight: 600 }}>{sel.size}</span>
+              <span style={{ flex: 1, fontSize: 17, fontWeight: 700 }}>{sel.size}</span>
               <button onClick={() => {
-                if (selMode === "album") { const pool = section === "hidden" ? hiddenAlbums : albums; setSel(new Set(pool.map((a) => a.key))); }
-                else { const pool = album ? albumItems(album) : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : []; setSel(new Set(pool.map((m) => m.uri))); }
+                if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key)));
+                else setSel(new Set(photoPool().map((m) => m.uri)));
               }} style={btnIcon}><Svg d={I.selectAll} size={22} /></button>
+              <button onClick={exitSel} style={btnIcon}><Svg d={I.x} size={22} /></button>
             </>
           ) : (
             <>
-              {(album || section === "hidden") && <button onClick={() => { if (album) setAlbum(null); else setSection("albums"); }} style={btnIcon}><Svg d={I.back} size={24} /></button>}
-              <span style={{ flex: 1, fontSize: 19, fontWeight: 700, paddingLeft: album || section === "hidden" ? 0 : 6 }}>{headerTitle}</span>
+              {(album || section === "hidden") && <button onClick={() => { if (album) setAlbumKey(null); else setSection("albums"); }} style={{ ...btnIcon, marginLeft: -8 }}><Svg d={I.back} size={24} /></button>}
+              <span style={{ flex: 1, fontSize: 19, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{headerTitle}</span>
               <button onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} style={btnIcon}><Svg d={theme === "dark" ? I.sun : I.moon} size={22} /></button>
             </>
           )}
         </div>
       </div>
 
-      {/* доступ */}
       {!allFiles && (
         <div style={{ background: T["--accbg"], padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ flex: 1, fontSize: 13, color: TXT }}>Нужен доступ ко всем файлам, чтобы видеть фото</span>
@@ -324,43 +324,35 @@ export default function App() {
       )}
 
       {/* ===== контент ===== */}
-      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
-        {loading && section !== "trash" && section !== "hidden" ? (
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
+        {loading && section !== "trash" ? (
           <div style={{ padding: 40, textAlign: "center", color: SUB, fontSize: 14 }}>Сканирование…</div>
         ) : album ? (
-          <PhotoGrid items={albumItems(album)} {...{ selMode, sel, toggleSel, startSel, openViewer, cfs, trash: false }} empty="Альбом пуст" />
+          <PhotoGrid items={album.items} br {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Альбом пуст" />
         ) : section === "albums" ? (
-          <AlbumsView albums={albums} {...{ selMode, sel, toggleSel, startSel, setAlbum, cfs }} />
+          <AlbumsView albums={albums} {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : section === "hidden" ? (
-          <AlbumsView albums={hiddenAlbums} hidden {...{ selMode, sel, toggleSel, startSel, setAlbum, cfs }} />
+          <AlbumsView albums={hiddenAlbums} hidden {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : section === "all" ? (
-          <PhotoGrid items={allPhotos} {...{ selMode, sel, toggleSel, startSel, openViewer, cfs, trash: false }} empty="Нет фотографий" />
+          <PhotoGrid items={allPhotos} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Нет фотографий" />
         ) : section === "video" ? (
-          <PhotoGrid items={allVideos} {...{ selMode, sel, toggleSel, startSel, openViewer, cfs, trash: false }} empty="Нет видео" />
+          <PhotoGrid items={allVideos} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Нет видео" />
         ) : (
-          <PhotoGrid items={trashItems} {...{ selMode, sel, toggleSel, startSel, openViewer, cfs, trash: true }} empty="Корзина пуста" />
+          <PhotoGrid items={trashItems} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: true }} empty="Корзина пуста" />
         )}
       </div>
 
-      {/* ===== нижняя панель / тулбары ===== */}
-      {selMode === "album" ? (
-        <Toolbar items={section === "hidden" ? [
-          [I.eye, "Показать", () => doShowAlbums(hiddenAlbums), false],
-          [I.trash, "Удалить", () => doDeleteAlbums(hiddenAlbums), true],
-        ] : [
-          [I.eyeOff, "Скрыть", () => doHideAlbums(albums), false],
-          [I.trash, "Удалить", () => doDeleteAlbums(albums), true],
-        ]} disabled={sel.size === 0} />
-      ) : selMode === "photo" ? (
-        <Toolbar items={section === "trash" ? [
-          [I.restore, "Восстановить", doRestore, false],
-          [I.trash, "Удалить", doDeleteForever, true],
-        ] : [
-          [I.share, "Поделиться", () => doSharePhotos(album ? albumItems(album) : section === "all" ? allPhotos : allVideos), false],
-          [I.trash, "Удалить", () => doDeletePhotos(album ? albumItems(album) : section === "all" ? allPhotos : allVideos), true],
-        ]} disabled={sel.size === 0} />
-      ) : !album && section !== "hidden" ? (
-        <div style={{ flexShrink: 0, padding: "8px 12px calc(env(safe-area-inset-bottom) + 8px)", display: "flex", justifyContent: "center" }}>
+      {/* ===== нижняя зона фиксированной высоты (панели не скачут) ===== */}
+      <div style={{ height: 64, paddingBottom: "env(safe-area-inset-bottom)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {selMode === "album" ? (
+          <Toolbar items={section === "hidden"
+            ? [[I.eye, "Показать", doShowAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]
+            : [[I.eyeOff, "Скрыть", doHideAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]} disabled={sel.size === 0} />
+        ) : selMode === "photo" ? (
+          <Toolbar items={section === "trash"
+            ? [[I.restore, "Восстановить", doRestore, false], [I.trash, "Удалить", doDeleteForever, true]]
+            : [[I.share, "Поделиться", doSharePhotos, false], [I.trash, "Удалить", doDeletePhotos, true]]} disabled={sel.size === 0} />
+        ) : showNav ? (
           <div style={{ display: "flex", background: BAR, border: "1px solid " + LINE, borderRadius: 30, padding: 5, gap: 2, boxShadow: "0 6px 20px rgba(0,0,0,.35)" }}>
             {SECS.map((s) => {
               const act = section === s.id;
@@ -377,8 +369,8 @@ export default function App() {
               );
             })}
           </div>
-        </div>
-      ) : (album || section === "hidden") ? <div style={{ height: "env(safe-area-inset-bottom)", flexShrink: 0 }} /> : null}
+        ) : null}
+      </div>
 
       {/* ===== вьювер ===== */}
       {viewer && vCur && (
@@ -402,7 +394,6 @@ export default function App() {
             )}
           </div>
 
-          {/* верх: имя + счётчик */}
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, paddingTop: "env(safe-area-inset-top)", background: "linear-gradient(to bottom, rgba(0,0,0,.75), transparent)", transform: bar ? "translateY(0)" : "translateY(-110%)", transition: "transform .2s ease", pointerEvents: bar ? "auto" : "none" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 18px" }}>
               <span style={{ flex: 1, minWidth: 0, color: "#fff", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vCur.name}</span>
@@ -411,8 +402,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* лево-верх: кнопка «Обои» (говорящая, только для фото) */}
-          {!vCur.video && (
+          {!vCur.video && !viewer.trash && (
             <div style={{ position: "absolute", left: 12, top: "calc(env(safe-area-inset-top) + 60px)", transform: bar ? "translateX(0)" : "translateX(-150%)", transition: "transform .2s ease", pointerEvents: bar ? "auto" : "none" }}>
               <span onClick={() => Apps.setWallpaper({ uri: vCur.uri }).catch(() => {})} style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(0,0,0,.55)", border: "1px solid rgba(255,255,255,.25)", color: "#fff", borderRadius: 22, padding: "8px 14px", fontSize: 13, fontWeight: 600 }}>
                 <Svg d={I.wall} size={19} /> Обои
@@ -420,17 +410,12 @@ export default function App() {
             </div>
           )}
 
-          {/* низ: тулбар */}
           <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingBottom: "env(safe-area-inset-bottom)", background: "linear-gradient(to top, rgba(0,0,0,.8), transparent)", transform: bar ? "translateY(0)" : "translateY(110%)", transition: "transform .2s ease", pointerEvents: bar ? "auto" : "none" }}>
             <div style={{ display: "flex", justifyContent: "space-around", padding: "18px 8px 16px" }}>
-              {(viewer.trash ? [
-                [I.restore, "Восстановить", viewerRestoreOne, false],
-                [I.trash, "Удалить", viewerDeleteOne, true],
-              ] : [
-                [I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: vCur.video ? "video/*" : "image/*" }).catch(() => {}), false],
-                [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false],
-                [I.trash, "Удалить", viewerDeleteOne, true],
-              ]).map(([ic, lbl, fn, red], i) => (
+              {(viewer.trash
+                ? [[I.restore, "Восстановить", viewerRestoreOne, false], [I.trash, "Удалить", viewerDeleteOne, true]]
+                : [[I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: vCur.video ? "video/*" : "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.trash, "Удалить", viewerDeleteOne, true]]
+              ).map(([ic, lbl, fn, red], i) => (
                 <span key={i} onClick={fn} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: red ? "#FF6B6B" : "#fff", minWidth: 60 }}>
                   <Svg d={ic} size={23} /><span style={{ fontSize: 11 }}>{lbl}</span>
                 </span>
@@ -440,12 +425,12 @@ export default function App() {
         </div>
       )}
 
-      {/* ===== диалог подтверждения ===== */}
+      {/* ===== подтверждение (Да/Нет) ===== */}
       {confirm && (
         <div style={{ position: "fixed", inset: 0, zIndex: 1400, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setConfirm(null)}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: BAR, borderRadius: 16, padding: 20, width: "80%", maxWidth: 330 }}>
             <div style={{ color: TXT, fontSize: 16, fontWeight: 600, marginBottom: 6 }}>{confirm.text}</div>
-            {confirm.sub && <div style={{ color: SUB, fontSize: 13, marginBottom: 18 }}>{confirm.sub}</div>}
+            {confirm.sub && <div style={{ color: SUB, fontSize: 13, marginBottom: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.sub}</div>}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 20px" }}>Нет</button>
               <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 22px" }}>Да</button>
@@ -460,55 +445,60 @@ export default function App() {
 const holdRef = { t: null, fired: false };
 const btnIcon = { display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, border: "none", background: "transparent", color: "var(--txt)", borderRadius: 20 };
 
-/* ===== сетка фото ===== */
-function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, cfs, trash, empty }) {
+/* ===== сетка фото (br = привязка к правому нижнему углу) ===== */
+function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty, br }) {
   const hold = useRef({ t: null, fired: false });
   if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
-  const cell = Math.floor((Math.min(window.innerWidth, 700) - 2 * 4 - 2 * 2) / 3);
+  const seq = items.map((m, i) => ({ m, i }));
+  const cells = br ? brCells(seq, 3) : seq;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 4 }}>
-      {items.map((m, i) => {
-        const on = sel.has(m.uri);
-        return (
-          <div key={m.uri}
-            onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, i, trash); }}
-            onContextMenu={(e) => { e.preventDefault(); if (!selMode) startSel("photo", m.uri); }}
-            onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
-            onTouchEnd={() => clearTimeout(hold.current.t)}
-            onTouchMove={() => clearTimeout(hold.current.t)}
-            style={{ position: "relative", aspectRatio: "1", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3, borderRadius: 8, overflow: "hidden" }}>
-            <Thumb uri={m.uri} video={m.video} size={cell} radius={8} />
-            {selMode && (
-              <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
-            )}
-          </div>
-        );
-      })}
+    <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: br ? "flex-end" : "flex-start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 4, width: "100%" }}>
+        {cells.map((c, ci) => {
+          if (!c) return <div key={"e" + ci} style={{ aspectRatio: "1" }} />;
+          const m = c.m, on = sel.has(m.uri);
+          return (
+            <div key={m.uri}
+              onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, c.i, trash); }}
+              onContextMenu={(e) => { e.preventDefault(); if (!selMode) startSel("photo", m.uri); }}
+              onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
+              onTouchEnd={() => clearTimeout(hold.current.t)}
+              onTouchMove={() => clearTimeout(hold.current.t)}
+              style={{ position: "relative", minWidth: 0, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
+              <Thumb uri={m.uri} video={m.video} />
+              {selMode && (
+                <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-/* ===== сетка альбомов (привязана к низу) ===== */
-function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbum, cfs, hidden }) {
+/* ===== сетка альбомов (привязана к правому нижнему углу) ===== */
+function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hidden }) {
   const hold = useRef({ t: null, fired: false });
   if (!albums.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{hidden ? "Нет скрытых альбомов" : "Альбомы не найдены"}</div>;
+  const cells = brCells(albums, 3);
   return (
     <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, padding: 10 }}>
-        {albums.map((a) => {
-          const on = sel.has(a.key);
-          const cover = a.items[0];
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, padding: 10, width: "100%" }}>
+        {cells.map((a, ci) => {
+          if (!a) return <div key={"e" + ci} aria-hidden style={{ visibility: "hidden" }}><div style={{ width: "100%", aspectRatio: "1" }} /><div style={{ height: 40 }} /></div>;
+          const on = sel.has(a.key); const cover = a.items[0];
           return (
             <div key={a.key}
-              onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode === "album") toggleSel(a.key); else setAlbum(a); }}
+              onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode === "album") toggleSel(a.key); else setAlbumKey(a.key); }}
               onContextMenu={(e) => { e.preventDefault(); startSel("album", a.key); }}
               onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; startSel("album", a.key); }, 450); }}
               onTouchEnd={() => clearTimeout(hold.current.t)}
               onTouchMove={() => clearTimeout(hold.current.t)}
-              style={{ position: "relative" }}>
+              style={{ minWidth: 0 }}>
               <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
-                {cover ? <Thumb uri={cover.uri} video={cover.video} size={Math.floor((Math.min(window.innerWidth, 700) - 20 - 16) / 3)} radius={12} />
-                  : <div style={{ width: "100%", aspectRatio: "1", background: "var(--row2)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--sub)" }}><Svg d={I.folder} size={34} /></div>}
+                {cover ? <Thumb uri={cover.uri} video={cover.video} />
+                  : <div style={{ width: "100%", aspectRatio: "1", background: "var(--row2)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--sub)" }}><Svg d={I.folder} size={34} /></div>}
                 {hidden && <span style={{ position: "absolute", top: 6, left: 6, color: "#fff", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.8))" }}><Svg d={I.eyeOff} size={16} /></span>}
                 {selMode === "album" && (
                   <span style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
@@ -524,17 +514,15 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbum, cfs, 
   );
 }
 
-/* ===== нижний тулбар выделения ===== */
+/* ===== нижний тулбар выделения (одной высоты с нав-панелью) ===== */
 function Toolbar({ items, disabled }) {
   return (
-    <div style={{ flexShrink: 0, background: "var(--bar)", borderTop: "1px solid var(--line)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div style={{ display: "flex", justifyContent: "space-around", padding: "10px 8px", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
-        {items.map(([ic, lbl, fn, red], i) => (
-          <span key={i} onClick={fn} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: red ? "var(--red)" : "var(--txt)", minWidth: 72 }}>
-            <Svg d={ic} size={23} /><span style={{ fontSize: 11.5 }}>{lbl}</span>
-          </span>
-        ))}
-      </div>
+    <div style={{ display: "flex", background: "var(--bar)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 20px rgba(0,0,0,.35)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
+      {items.map(([ic, lbl, fn, red], i) => (
+        <span key={i} onClick={fn} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: red ? "var(--red)" : "var(--txt)", minWidth: 84, padding: "2px 10px" }}>
+          <Svg d={ic} size={22} /><span style={{ fontSize: 11 }}>{lbl}</span>
+        </span>
+      ))}
     </div>
   );
 }
