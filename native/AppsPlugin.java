@@ -180,6 +180,7 @@ public class AppsPlugin extends Plugin {
                 android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
                 o2.inSampleSize = s;
                 b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
+                b = applyExif(b, f.getAbsolutePath());
             } else if (isVid(name)) {
                 try { b = ThumbnailUtils.createVideoThumbnail(f.getAbsolutePath(), android.provider.MediaStore.Images.Thumbnails.MINI_KIND); } catch (Throwable ignored) {}
                 if (b == null) {
@@ -263,6 +264,7 @@ public class AppsPlugin extends Plugin {
             Intent i = new Intent(Intent.ACTION_SEND);
             i.setType(mime);
             i.putExtra(Intent.EXTRA_STREAM, u);
+            i.setClipData(android.content.ClipData.newRawUri("", u));
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             Intent ch = Intent.createChooser(i, "Поделиться");
             ch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -283,6 +285,7 @@ public class AppsPlugin extends Plugin {
             Uri u = providerUri(f);
             Intent i = new Intent(Intent.ACTION_EDIT);
             i.setDataAndType(u, mime);
+            i.setClipData(android.content.ClipData.newRawUri("", u));
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             Intent ch = Intent.createChooser(i, "Изменить через");
             ch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -310,6 +313,24 @@ public class AppsPlugin extends Plugin {
             getContext().startActivity(ch);
             call.resolve();
         } catch (Exception e) { call.reject(e.getMessage()); }
+    }
+
+    private Bitmap applyExif(Bitmap b, String path) {
+        if (b == null) return null;
+        try {
+            android.media.ExifInterface ex = new android.media.ExifInterface(path);
+            int o = ex.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL);
+            int deg = 0;
+            if (o == android.media.ExifInterface.ORIENTATION_ROTATE_90) deg = 90;
+            else if (o == android.media.ExifInterface.ORIENTATION_ROTATE_180) deg = 180;
+            else if (o == android.media.ExifInterface.ORIENTATION_ROTATE_270) deg = 270;
+            if (deg != 0) {
+                android.graphics.Matrix m = new android.graphics.Matrix();
+                m.postRotate(deg);
+                b = Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
+            }
+        } catch (Throwable ignored) {}
+        return b;
     }
 
     private Uri providerUri(File f) {
