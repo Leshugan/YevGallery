@@ -52,8 +52,10 @@ const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(
 const tEnqueue = (j) => { tq.push(j); tPump(); };
 const thumbCache = new Map();
 
-function Thumb({ uri, video }) {
-  const [src, setSrc] = useState(() => thumbCache.get(uri) || "");
+function Thumb({ uri, video, ar, square }) {
+  const cached = thumbCache.get(uri);
+  const [src, setSrc] = useState(() => (cached && cached.src) || "");
+  const [ratio, setRatio] = useState(() => (cached && cached.ar) || ar || 1);
   const [vis, setVis] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -64,11 +66,11 @@ function Thumb({ uri, video }) {
   }, []);
   useEffect(() => {
     if (!vis || src) return; let live = true;
-    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; thumbCache.set(uri, v); if (live) setSrc(v); }).catch(() => { if (live) setSrc("x"); }));
+    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = (r && r.w && r.h) ? r.w / r.h : (ar || 1); thumbCache.set(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
     return () => { live = false; };
   }, [vis, uri]);
   return (
-    <div ref={ref} style={{ width: "100%", aspectRatio: "1", background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
+    <div ref={ref} style={{ width: "100%", aspectRatio: square ? "1" : String(ratio), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
       {src && src !== "x" && <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
       {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
       {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
@@ -281,11 +283,12 @@ export default function App() {
   /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
   const ask = (text, onYes, el) => { const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null; setConfirm({ text, rect, onYes: async () => { setConfirm(null); await onYes(); } }); };
   const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
+  const selPhotos = () => { const map = new Map(); for (const m of media) map.set(m.uri, m); for (const m of hiddenItems) map.set(m.uri, m); for (const m of trashItems) map.set(m.uri, m); return [...sel].map((u) => map.get(u)).filter(Boolean); };
 
-  const doDeletePhotos = (e) => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }, e && e.currentTarget); };
-  const doSharePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
+  const doDeletePhotos = (e) => { const items = selPhotos(); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }, e && e.currentTarget); };
+  const doSharePhotos = () => { const items = selPhotos(); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
   const doRestore = () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); restoreTrash(items); };
-  const doDeleteForever = (e) => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", () => { exitSel(); deleteForever(items); }, e && e.currentTarget); };
+  const doDeleteForever = (e) => { let items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) items = selPhotos(); if (!items.length) return; ask("Удалить навсегда?", () => { exitSel(); deleteForever(items); }, e && e.currentTarget); };
   const doHideAlbums = () => {
     const list = albums.filter((a) => sel.has(a.key)); exitSel();
     const uris = new Set(); const moved = []; const jobs = [];
@@ -378,7 +381,7 @@ export default function App() {
         {loading && !media.length ? (
           <div style={{ padding: 40, textAlign: "center", color: SUB, fontSize: 14 }}>Сканирование…</div>
         ) : album ? (
-          <PhotoGrid items={album.items} br {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Альбом пуст" />
+          <PhotoGrid items={album.items} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Альбом пуст" />
         ) : section === "albums" ? (
           <AlbumsView albums={albums} {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : section === "hidden" ? (
@@ -508,33 +511,28 @@ const holdRef = { t: null, fired: false };
 const btnIcon = { display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, border: "none", background: "transparent", color: "var(--txt)", borderRadius: 20 };
 
 /* ===== сетка фото ===== */
-function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty, br }) {
+function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty }) {
   const hold = useRef({ t: null, fired: false });
   if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
-  const seq = items.map((m, i) => ({ m, i }));
-  const cells = br ? brCells(seq, 3) : seq;
   return (
-    <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: br ? "flex-end" : "flex-start" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 4, width: "100%" }}>
-        {cells.map((c, ci) => {
-          if (!c) return <div key={"e" + ci} style={{ aspectRatio: "1" }} />;
-          const m = c.m, on = sel.has(m.uri);
-          return (
-            <div key={m.uri}
-              onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, c.i, trash); }}
-              onContextMenu={(e) => { e.preventDefault(); if (!selMode) startSel("photo", m.uri); }}
-              onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
-              onTouchEnd={() => clearTimeout(hold.current.t)}
-              onTouchMove={() => clearTimeout(hold.current.t)}
-              style={{ position: "relative", minWidth: 0, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
-              <Thumb uri={m.uri} video={m.video} />
-              {selMode && (
-                <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
-              )}
-            </div>
-          );
-        })}
-      </div>
+    <div style={{ columnCount: 3, columnGap: 3, padding: 4 }}>
+      {items.map((m, i) => {
+        const on = sel.has(m.uri);
+        return (
+          <div key={m.uri}
+            onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, i, trash); }}
+            onContextMenu={(e) => { e.preventDefault(); if (!selMode) startSel("photo", m.uri); }}
+            onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
+            onTouchEnd={() => clearTimeout(hold.current.t)}
+            onTouchMove={() => clearTimeout(hold.current.t)}
+            style={{ position: "relative", breakInside: "avoid", WebkitColumnBreakInside: "avoid", marginBottom: 3, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
+            <Thumb uri={m.uri} video={m.video} />
+            {selMode && (
+              <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -559,7 +557,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
               onTouchMove={() => clearTimeout(hold.current.t)}
               style={{ minWidth: 0 }}>
               <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
-                {cover ? <Thumb uri={cover.uri} video={cover.video} />
+                {cover ? <Thumb uri={cover.uri} video={cover.video} square />
                   : <div style={{ width: "100%", aspectRatio: "1", background: "var(--row2)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--sub)" }}><Svg d={I.folder} size={34} /></div>}
                 {hidden && <span style={{ position: "absolute", top: 6, left: 6, color: "#fff", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.8))" }}><Svg d={I.eyeOff} size={16} /></span>}
                 {selMode === "album" && (
