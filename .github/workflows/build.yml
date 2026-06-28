@@ -61,7 +61,7 @@ jobs:
           sed -i 's#<application #<application android:enableOnBackInvokedCallback="false" #' "$MAN"
           # FileProvider — для «обои/поделиться/изменить»
           if ! grep -q "appsfp" "$MAN"; then
-            sed -i 's#</application>#    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.appsfp" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/apps_file_paths" /></provider>\n    </application>#' "$MAN"
+            sed -i 's#</application>#    <provider android:name="leshugan.yg.AppsFileProvider" android:authorities="${applicationId}.appsfp" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/apps_file_paths" /></provider>\n    </application>#' "$MAN"
           fi
           echo "----- manifest -----"
           grep -E "uses-permission|requestLegacy|appsfp" "$MAN" || true
@@ -72,6 +72,7 @@ jobs:
           mkdir -p "$PKG" android/app/src/main/res/xml
           cp native/AppsPlugin.java "$PKG/AppsPlugin.java"
           cp native/MainActivity.java "$PKG/MainActivity.java"
+          cp native/AppsFileProvider.java "$PKG/AppsFileProvider.java"
           cp native/apps_file_paths.xml android/app/src/main/res/xml/apps_file_paths.xml
           echo "native files:" && ls -la "$PKG"
 
