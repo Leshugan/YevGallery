@@ -11,7 +11,7 @@ const THEMES = {
   dark:  { "--bg": "#1C140C", "--bar": "#2A2017", "--row2": "#2E251C", "--acc": "#EF6C00", "--accbg": "rgba(239,108,0,.18)", "--gold": "#F5A623", "--red": "#E05252", "--txt": "#F2EAE0", "--ink": "#E0D5C8", "--sub": "#B0A498", "--line": "#4A3A2A" },
   light: { "--bg": "#EEF1F4", "--bar": "#FFFFFF", "--row2": "#E4E8EC", "--acc": "#2F80ED", "--accbg": "rgba(47,128,237,.14)", "--gold": "#2F80ED", "--red": "#D14343", "--txt": "#1E2329", "--ink": "#3D4754", "--sub": "#6B7280", "--line": "#D3D8DE" },
 };
-const THEMEKEY = "yg_theme_v1", TRASHMETA = "yg_trashmeta_v1", SPECKEY = "yg_specials_v1", MEDIAKEY = "yg_media_v1";
+const THEMEKEY = "yg_theme_v1", TRASHMETA = "yg_trashmeta_v1", SPECKEY = "yg_specials_v1";
 const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 const loadMap = (k) => { try { return JSON.parse(ls.get(k)) || {}; } catch { return {}; } };
 const saveMap = (k, m) => ls.set(k, JSON.stringify(m));
@@ -123,19 +123,17 @@ function brCells(seq, cols) {
   return cells;
 }
 
-const initCache = (() => { try { return JSON.parse(ls.get(MEDIAKEY)) || {}; } catch { return {}; } })();
-
 export default function App() {
   const [theme, setTheme] = useState(() => ls.get(THEMEKEY) || "dark");
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
-  const [root, setRoot] = useState(initCache.root || "/storage/emulated/0");
+  const [root, setRoot] = useState("/storage/emulated/0");
   const TRASH = root + "/.YevGalleryTrash";
 
-  const [media, setMedia] = useState(initCache.media || []);
-  const [hiddenItems, setHiddenItems] = useState(initCache.hidden || []);
+  const [media, setMedia] = useState([]);
+  const [hiddenItems, setHiddenItems] = useState([]);
   const [trashItems, setTrashItems] = useState([]);
-  const [loading, setLoading] = useState(!(initCache.media && initCache.media.length));
+  const [loading, setLoading] = useState(true);
 
   const [section, setSection] = useState("albums");
   const [albumKey, setAlbumKey] = useState(null);
@@ -162,17 +160,20 @@ export default function App() {
 
   /* ---- доступ + сканирование (с кэшем, без слепого пересканирования) ---- */
   const checkAccess = useCallback(async () => { try { const r = await Apps.hasAllFiles(); setAllFiles(!!r.granted); return !!r.granted; } catch { setAllFiles(true); return true; } }, []);
+  const persistCache = (m, h, r) => { try { Apps.cacheSet({ data: JSON.stringify({ media: m, hidden: h, root: r }) }).catch(() => {}); } catch {} };
   const scan = useCallback(async (bg) => {
     if (!bg) setLoading(true);
     try {
       const r = await Apps.scanMedia();
+      const rt = r.root || root;
       if (r.root) setRoot(r.root);
       setMedia(r.items || []);
       setHiddenItems(r.hidden || []);
       lastScan.current = Date.now();
+      persistCache(r.items || [], r.hidden || [], rt);
     } catch {}
     setLoading(false);
-  }, []);
+  }, [root]);
   const loadTrash = useCallback(async () => {
     const meta = loadMap(TRASHMETA);
     try {
@@ -184,9 +185,14 @@ export default function App() {
   }, [TRASH]);
 
   // первый запуск: показываем кэш мгновенно, досканируем в фоне
-  useEffect(() => { (async () => { await checkAccess(); await scan(!!(initCache.media && initCache.media.length)); })(); }, []);
-  // кэш в localStorage держим в актуальном виде (мгновенный старт в след. раз)
-  useEffect(() => { ls.set(MEDIAKEY, JSON.stringify({ media, hidden: hiddenItems, root })); }, [media, hiddenItems, root]);
+  useEffect(() => { (async () => {
+    await checkAccess();
+    let had = false;
+    try { const c = await Apps.cacheGet(); if (c && c.data) { const j = JSON.parse(c.data); if (j.root) setRoot(j.root); setMedia(j.media || []); setHiddenItems(j.hidden || []); setLoading(false); had = !!(j.media && j.media.length); } } catch {}
+    await scan(had);
+  })(); }, []);
+  // обновляем дисковый кэш после локальных изменений (с задержкой, вне основного потока)
+  useEffect(() => { const id = setTimeout(() => persistCache(media, hiddenItems, root), 800); return () => clearTimeout(id); }, [media, hiddenItems, root]);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
   // возврат в приложение: фоновое обновление, без экрана загрузки и не чаще раза в 20с
   useEffect(() => {
@@ -220,53 +226,66 @@ export default function App() {
 
   /* ---- локальные мутации (без пересканирования) ---- */
   const removeUris = (uris) => { setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); };
-  const moveToTrash = async (items) => {
-    const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set();
+  const runJobs = (jobs) => { (async () => { for (const fn of jobs) { try { await fn(); } catch {} } })(); };
+
+  const moveToTrash = (items) => {
+    const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set(); const jobs = [];
     for (const it of items) {
       const tname = Date.now() + "_" + Math.random().toString(36).slice(2, 7) + "__" + baseName(it.uri);
-      try { await Apps.move({ from: it.uri, to: "file://" + TRASH + "/" + tname }); meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: "file://" + TRASH + "/" + tname, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); uris.add(it.uri); } catch {}
+      const to = "file://" + TRASH + "/" + tname;
+      meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime };
+      newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video });
+      uris.add(it.uri); jobs.push(() => Apps.move({ from: it.uri, to }));
     }
-    saveMap(TRASHMETA, meta); removeUris(uris); setTrashItems((ts) => [...newT, ...ts]);
+    saveMap(TRASHMETA, meta);
+    removeUris(uris); setTrashItems((ts) => [...newT, ...ts]); // мгновенно
+    runJobs(jobs);                                            // файлы — в фоне
   };
-  const restoreTrash = async (items) => {
-    const meta = loadMap(TRASHMETA); const back = []; const done = new Set();
+  const restoreTrash = (items) => {
+    const meta = loadMap(TRASHMETA); const back = []; const done = new Set(); const jobs = [];
     for (const it of items) {
       const k = baseName(it.uri); const m = meta[k]; if (!m) continue;
-      try { await Apps.move({ from: it.uri, to: m.orig }); delete meta[k]; const pp = parentOf(m.orig); back.push({ uri: m.orig, name: m.name, mtime: m.mtime || Date.now(), size: it.size, video: isVidName(m.name), bucketPath: pp, bucketName: baseName(pp) }); done.add(it.uri); } catch {}
+      const pp = parentOf(m.orig);
+      back.push({ uri: m.orig, name: m.name, mtime: m.mtime || Date.now(), size: it.size, video: isVidName(m.name), bucketPath: pp, bucketName: baseName(pp) });
+      done.add(it.uri); jobs.push(() => Apps.move({ from: it.uri, to: m.orig })); delete meta[k];
     }
-    saveMap(TRASHMETA, meta); setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => [...back, ...ms]);
+    saveMap(TRASHMETA, meta);
+    setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => [...back, ...ms]); // мгновенно
+    runJobs(jobs);
   };
-  const deleteForever = async (items) => {
-    const meta = loadMap(TRASHMETA); const done = new Set();
-    for (const it of items) { try { await Apps.delete({ uri: it.uri }); delete meta[baseName(it.uri)]; done.add(it.uri); } catch {} }
-    saveMap(TRASHMETA, meta); setTrashItems((ts) => ts.filter((t) => !done.has(t.uri)));
+  const deleteForever = (items) => {
+    const meta = loadMap(TRASHMETA); const done = new Set(); const jobs = [];
+    for (const it of items) { delete meta[baseName(it.uri)]; done.add(it.uri); jobs.push(() => Apps.delete({ uri: it.uri })); }
+    saveMap(TRASHMETA, meta);
+    setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); // мгновенно
+    runJobs(jobs);
   };
 
   /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
   const ask = (text, onYes) => setConfirm({ text, onYes: async () => { setConfirm(null); await onYes(); } });
   const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
 
-  const doDeletePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", async () => { exitSel(); await moveToTrash(items); }); };
+  const doDeletePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }); };
   const doSharePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
-  const doRestore = async () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); await restoreTrash(items); };
-  const doDeleteForever = () => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", async () => { exitSel(); await deleteForever(items); }); };
-  const doHideAlbums = async () => {
+  const doRestore = () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); restoreTrash(items); };
+  const doDeleteForever = () => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", () => { exitSel(); deleteForever(items); }); };
+  const doHideAlbums = () => {
     const list = albums.filter((a) => sel.has(a.key)); exitSel();
-    const uris = new Set(); const moved = [];
-    for (const a of list) { for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: true }); } catch {} } for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
-    setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => [...moved, ...hs]);
+    const uris = new Set(); const moved = []; const jobs = [];
+    for (const a of list) { for (const p of a.paths) jobs.push(() => Apps.setNomedia({ path: "file://" + p, on: true })); for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
+    setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => [...moved, ...hs]); runJobs(jobs);
   };
-  const doShowAlbums = async () => {
+  const doShowAlbums = () => {
     const list = hiddenAlbums.filter((a) => sel.has(a.key)); exitSel();
-    const uris = new Set(); const moved = [];
-    for (const a of list) { for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: false }); } catch {} } for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
-    setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => [...moved, ...ms]);
+    const uris = new Set(); const moved = []; const jobs = [];
+    for (const a of list) { for (const p of a.paths) jobs.push(() => Apps.setNomedia({ path: "file://" + p, on: false })); for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
+    setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => [...moved, ...ms]); runJobs(jobs);
   };
   const doDeleteAlbums = () => {
     const pool = section === "hidden" ? hiddenAlbums : albums;
     const list = pool.filter((a) => sel.has(a.key)); if (!list.length) return;
     let all = []; for (const a of list) all = all.concat(a.items);
-    ask("Удалить альбомы в корзину?", async () => { exitSel(); await moveToTrash(all); });
+    ask("Удалить альбомы в корзину?", () => { exitSel(); moveToTrash(all); });
   };
 
   /* ---- вьювер ---- */
@@ -274,15 +293,15 @@ export default function App() {
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
-  const viewerDeleteOne = () => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", async () => { if (isTrash) await deleteForever([cur]); else await moveToTrash([cur]); removeFromViewer(); }); };
-  const viewerRestoreOne = async () => { if (!vCur) return; const cur = vCur; await restoreTrash([cur]); removeFromViewer(); };
+  const viewerDeleteOne = () => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", () => { removeFromViewer(); if (isTrash) deleteForever([cur]); else moveToTrash([cur]); }); };
+  const viewerRestoreOne = () => { if (!vCur) return; const cur = vCur; removeFromViewer(); restoreTrash([cur]); };
 
   /* ---- секции ---- */
   const trashTapRef = useRef(0);
   const goSection = (s) => {
     if (s === "trash") {
       const now = Date.now();
-      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", async () => { await deleteForever(trashItems); }); return; }
+      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", () => { deleteForever(trashItems); }); return; }
       trashTapRef.current = now; loadTrash();
     }
     exitSel(); setAlbumKey(null); setSection(s);
@@ -431,12 +450,16 @@ export default function App() {
         </div>
       )}
 
-      {/* ===== подтверждение Да/Нет — рядом с кнопкой удаления (внизу) ===== */}
+      {/* ===== подтверждение Да/Нет — по центру (как в YevFiles, палец не закрывает) ===== */}
       {confirm && (
-        <div style={{ position: "fixed", left: 8, right: 8, bottom: "calc(env(safe-area-inset-bottom) + 10px)", zIndex: 1600, display: "flex", alignItems: "center", gap: 10, background: BAR, border: "1px solid " + LINE, borderRadius: 18, padding: "10px 10px 10px 16px", boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 8px 28px rgba(0,0,0,.55)" }}>
-          <span style={{ flex: 1, minWidth: 0, color: TXT, fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</span>
-          <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 12, color: SUB, fontSize: 14, padding: "8px 18px" }}>Нет</button>
-          <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 700, padding: "8px 20px" }}>Да</button>
+        <div style={{ position: "fixed", inset: 0, zIndex: 1600, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setConfirm(null)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: BAR, borderRadius: 16, padding: 20, width: "80%", maxWidth: 320, boxShadow: "0 18px 48px rgba(0,0,0,.6)" }}>
+            <div style={{ color: TXT, fontSize: 16, fontWeight: 600, marginBottom: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 20px" }}>Нет</button>
+              <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 22px" }}>Да</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
