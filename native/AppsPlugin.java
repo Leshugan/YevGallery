@@ -72,6 +72,8 @@ public class AppsPlugin extends Plugin {
             String name = k.getName();
             if (name.startsWith(".")) continue;             // служебные/скрытые папки и файлы не трогаем
             if (k.isDirectory()) {
+                String dn = k.getName();
+                if (dir.getName().equals("Android") && (dn.equals("data") || dn.equals("obb"))) continue; // огромные/недоступные ветки
                 walk(k, branchHidden, vis, hid, depth + 1);
             } else {
                 boolean vid = isVid(name);
