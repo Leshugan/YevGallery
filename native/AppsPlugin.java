@@ -167,6 +167,7 @@ public class AppsPlugin extends Plugin {
             if (cacheFile.exists()) {
                 byte[] data = readAll(new FileInputStream(cacheFile));
                 ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(data, Base64.NO_WRAP));
+                try { android.graphics.BitmapFactory.Options bo = new android.graphics.BitmapFactory.Options(); bo.inJustDecodeBounds = true; android.graphics.BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), bo); ret.put("w", bo.outWidth); ret.put("h", bo.outHeight); } catch (Exception ignored) {}
                 call.resolve(ret); return;
             }
             String name = f.getName().toLowerCase();
@@ -175,7 +176,7 @@ public class AppsPlugin extends Plugin {
                 android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
                 o.inJustDecodeBounds = true;
                 android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-                int s = 1; while (o.outWidth / s > 800 || o.outHeight / s > 800) s *= 2;
+                int s = 1; while (o.outWidth / s > 1024 || o.outHeight / s > 1024) s *= 2;
                 android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
                 o2.inSampleSize = s;
                 b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
@@ -189,12 +190,13 @@ public class AppsPlugin extends Plugin {
             }
             if (b == null) { call.resolve(ret); return; }
             int mx = Math.max(b.getWidth(), b.getHeight());
-            if (mx > 400) { float sc = 400f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
+            if (mx > 512) { float sc = 512f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            b.compress(Bitmap.CompressFormat.JPEG, 85, out);
+            b.compress(Bitmap.CompressFormat.JPEG, 86, out);
             byte[] bytes = out.toByteArray();
             try { OutputStream fos = new FileOutputStream(cacheFile); fos.write(bytes); fos.close(); } catch (Exception ignored) {}
             ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP));
+            ret.put("w", b.getWidth()); ret.put("h", b.getHeight());
             call.resolve(ret);
         } catch (Exception e) { call.resolve(new JSObject()); }
     }
