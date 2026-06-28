@@ -11,12 +11,15 @@ const THEMES = {
   dark:  { "--bg": "#1C140C", "--bar": "#2A2017", "--row2": "#2E251C", "--acc": "#EF6C00", "--accbg": "rgba(239,108,0,.18)", "--gold": "#F5A623", "--red": "#E05252", "--txt": "#F2EAE0", "--ink": "#E0D5C8", "--sub": "#B0A498", "--line": "#4A3A2A" },
   light: { "--bg": "#EEF1F4", "--bar": "#FFFFFF", "--row2": "#E4E8EC", "--acc": "#2F80ED", "--accbg": "rgba(47,128,237,.14)", "--gold": "#2F80ED", "--red": "#D14343", "--txt": "#1E2329", "--ink": "#3D4754", "--sub": "#6B7280", "--line": "#D3D8DE" },
 };
-const THEMEKEY = "yg_theme_v1", TRASHMETA = "yg_trashmeta_v1", SPECKEY = "yg_specials_v1";
+const THEMEKEY = "yg_theme_v1", TRASHMETA = "yg_trashmeta_v1", SPECKEY = "yg_specials_v1", MEDIAKEY = "yg_media_v1";
 const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 const loadMap = (k) => { try { return JSON.parse(ls.get(k)) || {}; } catch { return {}; } };
 const saveMap = (k, m) => ls.set(k, JSON.stringify(m));
 const buzz = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
 const baseName = (p) => { p = String(p).replace(/^file:\/\//, ""); return p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p; };
+const parentOf = (p) => { p = String(p).replace(/^file:\/\//, ""); return p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : ""; };
+const VID_EXT = new Set(["mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v", "ts"]);
+const isVidName = (n) => VID_EXT.has((n.split(".").pop() || "").toLowerCase());
 
 const I = {
   back: <path d="M15 18l-6-6 6-6" />,
@@ -43,7 +46,7 @@ const Svg = ({ d, size = 24 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 );
 
-/* ===== ленивые превью с ограничением параллелизма ===== */
+/* ===== ленивые превью с кэшем и ограничением параллелизма ===== */
 const tq = []; let tActive = 0; const T_MAX = 6;
 const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(); tActive++; j().finally(() => { tActive--; tPump(); }); } };
 const tEnqueue = (j) => { tq.push(j); tPump(); };
@@ -83,8 +86,7 @@ function classify(p, n) {
   if (n === "Pictures") return { key: "pictures", name: "Pictures" };
   return null;
 }
-// порядок справа-налево по нижнему ряду: первый = правый нижний угол
-const SPEC_ORDER = ["screenshots", "camera", "pictures", "whatsapp", "telegram"];
+const SPEC_ORDER = ["screenshots", "camera", "pictures", "whatsapp", "telegram"]; // [0] = правый нижний угол
 const SPEC_NAME = { screenshots: "Скриншоты", camera: "Камера", pictures: "Pictures", whatsapp: "WhatsApp", telegram: "Telegram" };
 
 function buildAlbums(items, isHidden) {
@@ -99,11 +101,9 @@ function buildAlbums(items, isHidden) {
   }
   for (const a of map.values()) a.items.sort((x, y) => y.mtime - x.mtime);
   if (isHidden) return [...map.values()].sort((x, y) => x.items[0].mtime - y.items[0].mtime);
-  // спец-альбомы помним, чтобы пустые (после удаления фото) не исчезали
   const seen = loadMap(SPECKEY);
   for (const k of SPEC_ORDER) { const a = map.get(k); if (a) seen[k] = [...a.paths]; }
   saveMap(SPECKEY, seen);
-  // обычные — по возрастанию свежести (новые окажутся выше), спец — в начале (правый нижний угол)
   const others = [...map.values()].filter((a) => !a.special).sort((x, y) => x.items[0].mtime - y.items[0].mtime);
   const specials = [];
   for (const k of SPEC_ORDER) {
@@ -111,10 +111,10 @@ function buildAlbums(items, isHidden) {
     if (!a && seen[k] && seen[k].length) a = { key: k, name: SPEC_NAME[k], special: true, paths: new Set(seen[k]), items: [] };
     if (a) specials.push(a);
   }
-  return [...specials, ...others]; // index 0 = правый нижний угол
+  return [...specials, ...others];
 }
 
-// раскладка «привязки к правому нижнему углу»: seq[0] -> низ-право, дальше влево и вверх; пустые ячейки сверху-слева
+// привязка к правому нижнему углу
 function brCells(seq, cols) {
   const rows = Math.max(1, Math.ceil(seq.length / cols));
   const total = rows * cols;
@@ -123,32 +123,35 @@ function brCells(seq, cols) {
   return cells;
 }
 
+const initCache = (() => { try { return JSON.parse(ls.get(MEDIAKEY)) || {}; } catch { return {}; } })();
+
 export default function App() {
   const [theme, setTheme] = useState(() => ls.get(THEMEKEY) || "dark");
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [root, setRoot] = useState("/storage/emulated/0");
+  const [root, setRoot] = useState(initCache.root || "/storage/emulated/0");
   const TRASH = root + "/.YevGalleryTrash";
 
-  const [media, setMedia] = useState([]);
-  const [hiddenItems, setHiddenItems] = useState([]);
+  const [media, setMedia] = useState(initCache.media || []);
+  const [hiddenItems, setHiddenItems] = useState(initCache.hidden || []);
   const [trashItems, setTrashItems] = useState([]);
+  const [loading, setLoading] = useState(!(initCache.media && initCache.media.length));
 
-  const [section, setSection] = useState("albums"); // albums | all | video | trash | hidden
+  const [section, setSection] = useState("albums");
   const [albumKey, setAlbumKey] = useState(null);
   const [viewer, setViewer] = useState(null);
   const [bar, setBar] = useState(true);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
 
-  const [selMode, setSelMode] = useState(null); // null | 'photo' | 'album'
+  const [selMode, setSelMode] = useState(null);
   const [sel, setSel] = useState(() => new Set());
   const [confirm, setConfirm] = useState(null);
 
   const cfs = (u) => { try { return Capacitor.convertFileSrc(u); } catch { return u; } };
   const scrollRef = useRef(null);
   const vTouch = useRef(null);
+  const lastScan = useRef(0);
 
   const albums = useMemo(() => buildAlbums(media, false), [media]);
   const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, true), [hiddenItems]);
@@ -157,16 +160,17 @@ export default function App() {
   const albumPool = section === "hidden" ? hiddenAlbums : albums;
   const album = albumKey ? albumPool.find((a) => a.key === albumKey) : null;
 
-  /* ---- доступ + сканирование ---- */
+  /* ---- доступ + сканирование (с кэшем, без слепого пересканирования) ---- */
   const checkAccess = useCallback(async () => { try { const r = await Apps.hasAllFiles(); setAllFiles(!!r.granted); return !!r.granted; } catch { setAllFiles(true); return true; } }, []);
-  const scan = useCallback(async () => {
-    setLoading(true);
+  const scan = useCallback(async (bg) => {
+    if (!bg) setLoading(true);
     try {
       const r = await Apps.scanMedia();
       if (r.root) setRoot(r.root);
       setMedia(r.items || []);
       setHiddenItems(r.hidden || []);
-    } catch { setMedia([]); setHiddenItems([]); }
+      lastScan.current = Date.now();
+    } catch {}
     setLoading(false);
   }, []);
   const loadTrash = useCallback(async () => {
@@ -179,23 +183,24 @@ export default function App() {
     } catch { setTrashItems([]); }
   }, [TRASH]);
 
-  useEffect(() => { (async () => { await checkAccess(); await scan(); })(); }, []);
+  // первый запуск: показываем кэш мгновенно, досканируем в фоне
+  useEffect(() => { (async () => { await checkAccess(); await scan(!!(initCache.media && initCache.media.length)); })(); }, []);
+  // кэш в localStorage держим в актуальном виде (мгновенный старт в след. раз)
+  useEffect(() => { ls.set(MEDIAKEY, JSON.stringify({ media, hidden: hiddenItems, root })); }, [media, hiddenItems, root]);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
+  // возврат в приложение: фоновое обновление, без экрана загрузки и не чаще раза в 20с
   useEffect(() => {
-    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok) scan(); }); });
+    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok && Date.now() - lastScan.current > 20000) scan(true); }); });
     return () => { sub.then((s) => s.remove()).catch(() => {}); };
   }, [checkAccess, scan]);
 
-  // если открытый альбом опустел/пропал — выходим к списку
   useEffect(() => { if (albumKey && !album) setAlbumKey(null); }, [albumKey, album]);
 
-  // привязка к правому нижнему углу: после рендера прокручиваем вниз
   useLayoutEffect(() => {
     const el = scrollRef.current; if (!el) return;
     if (section === "albums" || section === "hidden" || albumKey) el.scrollTop = el.scrollHeight;
   }, [section, albumKey, albums, hiddenAlbums, media]);
 
-  /* ---- системная кнопка «назад» ---- */
   useEffect(() => {
     const sub = CapApp.addListener("backButton", () => {
       if (confirm) { setConfirm(null); return; }
@@ -213,48 +218,55 @@ export default function App() {
   const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const startSel = (mode, id) => { buzz(15); setSelMode(mode); setSel(new Set([id])); };
 
-  /* ---- корзина ---- */
+  /* ---- локальные мутации (без пересканирования) ---- */
+  const removeUris = (uris) => { setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); };
   const moveToTrash = async (items) => {
-    const meta = loadMap(TRASHMETA);
+    const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set();
     for (const it of items) {
       const tname = Date.now() + "_" + Math.random().toString(36).slice(2, 7) + "__" + baseName(it.uri);
-      try { await Apps.move({ from: it.uri, to: "file://" + TRASH + "/" + tname }); meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; } catch {}
+      try { await Apps.move({ from: it.uri, to: "file://" + TRASH + "/" + tname }); meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: "file://" + TRASH + "/" + tname, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); uris.add(it.uri); } catch {}
     }
-    saveMap(TRASHMETA, meta);
+    saveMap(TRASHMETA, meta); removeUris(uris); setTrashItems((ts) => [...newT, ...ts]);
   };
   const restoreTrash = async (items) => {
-    const meta = loadMap(TRASHMETA);
-    for (const it of items) { const tn = baseName(it.uri); const m = meta[tn]; if (!m) continue; try { await Apps.move({ from: it.uri, to: m.orig }); delete meta[tn]; } catch {} }
-    saveMap(TRASHMETA, meta);
+    const meta = loadMap(TRASHMETA); const back = []; const done = new Set();
+    for (const it of items) {
+      const k = baseName(it.uri); const m = meta[k]; if (!m) continue;
+      try { await Apps.move({ from: it.uri, to: m.orig }); delete meta[k]; const pp = parentOf(m.orig); back.push({ uri: m.orig, name: m.name, mtime: m.mtime || Date.now(), size: it.size, video: isVidName(m.name), bucketPath: pp, bucketName: baseName(pp) }); done.add(it.uri); } catch {}
+    }
+    saveMap(TRASHMETA, meta); setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => [...back, ...ms]);
   };
   const deleteForever = async (items) => {
-    const meta = loadMap(TRASHMETA);
-    for (const it of items) { try { await Apps.delete({ uri: it.uri }); delete meta[baseName(it.uri)]; } catch {} }
-    saveMap(TRASHMETA, meta);
+    const meta = loadMap(TRASHMETA); const done = new Set();
+    for (const it of items) { try { await Apps.delete({ uri: it.uri }); delete meta[baseName(it.uri)]; done.add(it.uri); } catch {} }
+    saveMap(TRASHMETA, meta); setTrashItems((ts) => ts.filter((t) => !done.has(t.uri)));
   };
-  const refreshAll = async () => { await scan(); await loadTrash(); };
 
-  /* ---- подтверждение + действия ---- */
-  const ask = (text, sub, onYes) => setConfirm({ text, sub, onYes: async () => { setConfirm(null); await onYes(); } });
+  /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
+  const ask = (text, onYes) => setConfirm({ text, onYes: async () => { setConfirm(null); await onYes(); } });
   const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
 
-  const doDeletePhotos = () => {
-    const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return;
-    ask(items.length > 1 ? "Удалить " + items.length + " фото?" : "Удалить файл?", items.length === 1 ? items[0].name : "Будут перемещены в корзину", async () => { exitSel(); await moveToTrash(items); await refreshAll(); });
-  };
+  const doDeletePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", async () => { exitSel(); await moveToTrash(items); }); };
   const doSharePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
-  const doRestore = async () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); await restoreTrash(items); await refreshAll(); };
-  const doDeleteForever = () => {
-    const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return;
-    ask("Удалить навсегда?", items.length + " файл(ов) нельзя будет восстановить", async () => { exitSel(); await deleteForever(items); await refreshAll(); });
+  const doRestore = async () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); await restoreTrash(items); };
+  const doDeleteForever = () => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", async () => { exitSel(); await deleteForever(items); }); };
+  const doHideAlbums = async () => {
+    const list = albums.filter((a) => sel.has(a.key)); exitSel();
+    const uris = new Set(); const moved = [];
+    for (const a of list) { for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: true }); } catch {} } for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
+    setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => [...moved, ...hs]);
   };
-  const doHideAlbums = async () => { const list = albums.filter((a) => sel.has(a.key)); exitSel(); for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: true }); } catch {} } await refreshAll(); };
-  const doShowAlbums = async () => { const list = hiddenAlbums.filter((a) => sel.has(a.key)); exitSel(); for (const a of list) for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: false }); } catch {} } await refreshAll(); };
+  const doShowAlbums = async () => {
+    const list = hiddenAlbums.filter((a) => sel.has(a.key)); exitSel();
+    const uris = new Set(); const moved = [];
+    for (const a of list) { for (const p of a.paths) { try { await Apps.setNomedia({ path: "file://" + p, on: false }); } catch {} } for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
+    setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => [...moved, ...ms]);
+  };
   const doDeleteAlbums = () => {
     const pool = section === "hidden" ? hiddenAlbums : albums;
     const list = pool.filter((a) => sel.has(a.key)); if (!list.length) return;
     let all = []; for (const a of list) all = all.concat(a.items);
-    ask("Удалить выбранные альбомы?", "Все фото (" + all.length + ") уйдут в корзину, папки останутся", async () => { exitSel(); await moveToTrash(all); await refreshAll(); });
+    ask("Удалить альбомы в корзину?", async () => { exitSel(); await moveToTrash(all); });
   };
 
   /* ---- вьювер ---- */
@@ -262,18 +274,15 @@ export default function App() {
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
-  const viewerDeleteOne = () => {
-    if (!vCur) return; const cur = vCur, isTrash = viewer.trash;
-    ask("Удалить файл?", cur.name, async () => { if (isTrash) await deleteForever([cur]); else await moveToTrash([cur]); removeFromViewer(); await refreshAll(); });
-  };
-  const viewerRestoreOne = async () => { if (!vCur) return; const cur = vCur; await restoreTrash([cur]); removeFromViewer(); await refreshAll(); };
+  const viewerDeleteOne = () => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", async () => { if (isTrash) await deleteForever([cur]); else await moveToTrash([cur]); removeFromViewer(); }); };
+  const viewerRestoreOne = async () => { if (!vCur) return; const cur = vCur; await restoreTrash([cur]); removeFromViewer(); };
 
   /* ---- секции ---- */
   const trashTapRef = useRef(0);
   const goSection = (s) => {
     if (s === "trash") {
       const now = Date.now();
-      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", "Все файлы будут удалены безвозвратно", async () => { await deleteForever(trashItems); await refreshAll(); }); return; }
+      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", async () => { await deleteForever(trashItems); }); return; }
       trashTapRef.current = now; loadTrash();
     }
     exitSel(); setAlbumKey(null); setSection(s);
@@ -300,10 +309,7 @@ export default function App() {
           {selMode ? (
             <>
               <span style={{ flex: 1, fontSize: 17, fontWeight: 700 }}>{sel.size}</span>
-              <button onClick={() => {
-                if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key)));
-                else setSel(new Set(photoPool().map((m) => m.uri)));
-              }} style={btnIcon}><Svg d={I.selectAll} size={22} /></button>
+              <button onClick={() => { if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key))); else setSel(new Set(photoPool().map((m) => m.uri))); }} style={btnIcon}><Svg d={I.selectAll} size={22} /></button>
               <button onClick={exitSel} style={btnIcon}><Svg d={I.x} size={22} /></button>
             </>
           ) : (
@@ -325,7 +331,7 @@ export default function App() {
 
       {/* ===== контент ===== */}
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
-        {loading && section !== "trash" ? (
+        {loading && !media.length ? (
           <div style={{ padding: 40, textAlign: "center", color: SUB, fontSize: 14 }}>Сканирование…</div>
         ) : album ? (
           <PhotoGrid items={album.items} br {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Альбом пуст" />
@@ -342,7 +348,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ===== нижняя зона фиксированной высоты (панели не скачут) ===== */}
+      {/* ===== нижняя зона фиксированной высоты ===== */}
       <div style={{ height: 64, paddingBottom: "env(safe-area-inset-bottom)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {selMode === "album" ? (
           <Toolbar items={section === "hidden"
@@ -425,17 +431,12 @@ export default function App() {
         </div>
       )}
 
-      {/* ===== подтверждение (Да/Нет) ===== */}
+      {/* ===== подтверждение Да/Нет — рядом с кнопкой удаления (внизу) ===== */}
       {confirm && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1400, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setConfirm(null)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: BAR, borderRadius: 16, padding: 20, width: "80%", maxWidth: 330 }}>
-            <div style={{ color: TXT, fontSize: 16, fontWeight: 600, marginBottom: 6 }}>{confirm.text}</div>
-            {confirm.sub && <div style={{ color: SUB, fontSize: 13, marginBottom: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.sub}</div>}
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 20px" }}>Нет</button>
-              <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 22px" }}>Да</button>
-            </div>
-          </div>
+        <div style={{ position: "fixed", left: 8, right: 8, bottom: "calc(env(safe-area-inset-bottom) + 10px)", zIndex: 1600, display: "flex", alignItems: "center", gap: 10, background: BAR, border: "1px solid " + LINE, borderRadius: 18, padding: "10px 10px 10px 16px", boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 8px 28px rgba(0,0,0,.55)" }}>
+          <span style={{ flex: 1, minWidth: 0, color: TXT, fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</span>
+          <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 12, color: SUB, fontSize: 14, padding: "8px 18px" }}>Нет</button>
+          <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 700, padding: "8px 20px" }}>Да</button>
         </div>
       )}
     </div>
@@ -445,7 +446,7 @@ export default function App() {
 const holdRef = { t: null, fired: false };
 const btnIcon = { display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, border: "none", background: "transparent", color: "var(--txt)", borderRadius: 20 };
 
-/* ===== сетка фото (br = привязка к правому нижнему углу) ===== */
+/* ===== сетка фото ===== */
 function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty, br }) {
   const hold = useRef({ t: null, fired: false });
   if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
@@ -514,7 +515,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
   );
 }
 
-/* ===== нижний тулбар выделения (одной высоты с нав-панелью) ===== */
+/* ===== нижний тулбар выделения ===== */
 function Toolbar({ items, disabled }) {
   return (
     <div style={{ display: "flex", background: "var(--bar)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 20px rgba(0,0,0,.35)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
