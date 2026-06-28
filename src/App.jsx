@@ -134,6 +134,7 @@ export default function App() {
   const [hiddenItems, setHiddenItems] = useState([]);
   const [trashItems, setTrashItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingHidden, setLoadingHidden] = useState(false);
 
   const [section, setSection] = useState("albums");
   const [albumKey, setAlbumKey] = useState(null);
@@ -150,6 +151,9 @@ export default function App() {
   const scrollRef = useRef(null);
   const vTouch = useRef(null);
   const lastScan = useRef(0);
+  const pending = useRef(0);
+  const hiddenLoaded = useRef(false);
+  const dedup = (arr) => { const seen = new Set(); const out = []; for (const x of arr) { if (!seen.has(x.uri)) { seen.add(x.uri); out.push(x); } } return out; };
 
   const albums = useMemo(() => buildAlbums(media, false), [media]);
   const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, true), [hiddenItems]);
@@ -160,20 +164,32 @@ export default function App() {
 
   /* ---- доступ + сканирование (с кэшем, без слепого пересканирования) ---- */
   const checkAccess = useCallback(async () => { try { const r = await Apps.hasAllFiles(); setAllFiles(!!r.granted); return !!r.granted; } catch { setAllFiles(true); return true; } }, []);
-  const persistCache = (m, h, r) => { try { Apps.cacheSet({ data: JSON.stringify({ media: m, hidden: h, root: r }) }).catch(() => {}); } catch {} };
+  const persistCache = (key, data) => { try { Apps.cacheSet({ key, data: JSON.stringify(data) }).catch(() => {}); } catch {} };
   const scan = useCallback(async (bg) => {
+    if (bg && pending.current > 0) return; // не сканируем во время файловых операций
     if (!bg) setLoading(true);
     try {
-      const r = await Apps.scanMedia();
-      const rt = r.root || root;
+      const r = await Apps.scanMedia({ mode: "visible" });
       if (r.root) setRoot(r.root);
-      setMedia(r.items || []);
-      setHiddenItems(r.hidden || []);
+      const items = dedup(r.items || []);
+      setMedia(items);
       lastScan.current = Date.now();
-      persistCache(r.items || [], r.hidden || [], rt);
+      persistCache("media", { items, root: r.root || root });
     } catch {}
     setLoading(false);
   }, [root]);
+  const scanHidden = useCallback(async (bg) => {
+    if (bg && pending.current > 0) return;
+    if (!bg) setLoadingHidden(true);
+    try {
+      const r = await Apps.scanMedia({ mode: "hidden" });
+      const items = dedup(r.items || []);
+      setHiddenItems(items);
+      hiddenLoaded.current = true;
+      persistCache("hidden", { items });
+    } catch {}
+    setLoadingHidden(false);
+  }, []);
   const loadTrash = useCallback(async () => {
     const meta = loadMap(TRASHMETA);
     try {
@@ -188,17 +204,18 @@ export default function App() {
   useEffect(() => { (async () => {
     await checkAccess();
     let had = false;
-    try { const c = await Apps.cacheGet(); if (c && c.data) { const j = JSON.parse(c.data); if (j.root) setRoot(j.root); setMedia(j.media || []); setHiddenItems(j.hidden || []); setLoading(false); had = !!(j.media && j.media.length); } } catch {}
+    try { const c = await Apps.cacheGet({ key: "media" }); if (c && c.data) { const j = JSON.parse(c.data); if (j.root) setRoot(j.root); setMedia(dedup(j.items || [])); setLoading(false); had = !!(j.items && j.items.length); } } catch {}
     await scan(had);
   })(); }, []);
-  // обновляем дисковый кэш после локальных изменений (с задержкой, вне основного потока)
-  useEffect(() => { const id = setTimeout(() => persistCache(media, hiddenItems, root), 800); return () => clearTimeout(id); }, [media, hiddenItems, root]);
+  // дисковый кэш после локальных изменений (с задержкой, вне основного потока)
+  useEffect(() => { const id = setTimeout(() => persistCache("media", { items: media, root }), 800); return () => clearTimeout(id); }, [media, root]);
+  useEffect(() => { if (!hiddenLoaded.current) return; const id = setTimeout(() => persistCache("hidden", { items: hiddenItems }), 800); return () => clearTimeout(id); }, [hiddenItems]);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
   // возврат в приложение: фоновое обновление, без экрана загрузки и не чаще раза в 20с
   useEffect(() => {
-    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok && Date.now() - lastScan.current > 20000) scan(true); }); });
+    const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok && Date.now() - lastScan.current > 20000) { scan(true); if (hiddenLoaded.current) scanHidden(true); } }); });
     return () => { sub.then((s) => s.remove()).catch(() => {}); };
-  }, [checkAccess, scan]);
+  }, [checkAccess, scan, scanHidden]);
 
   useEffect(() => { if (albumKey && !album) setAlbumKey(null); }, [albumKey, album]);
 
@@ -226,7 +243,7 @@ export default function App() {
 
   /* ---- локальные мутации (без пересканирования) ---- */
   const removeUris = (uris) => { setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); };
-  const runJobs = (jobs) => { (async () => { for (const fn of jobs) { try { await fn(); } catch {} } })(); };
+  const runJobs = (jobs) => { if (!jobs.length) return; pending.current += jobs.length; (async () => { for (const fn of jobs) { try { await fn(); } catch {} finally { pending.current = Math.max(0, pending.current - 1); } } })(); };
 
   const moveToTrash = (items) => {
     const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set(); const jobs = [];
@@ -250,7 +267,7 @@ export default function App() {
       done.add(it.uri); jobs.push(() => Apps.move({ from: it.uri, to: m.orig })); delete meta[k];
     }
     saveMap(TRASHMETA, meta);
-    setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => [...back, ...ms]); // мгновенно
+    setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => dedup([...back, ...ms])); // мгновенно
     runJobs(jobs);
   };
   const deleteForever = (items) => {
@@ -262,30 +279,30 @@ export default function App() {
   };
 
   /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
-  const ask = (text, onYes) => setConfirm({ text, onYes: async () => { setConfirm(null); await onYes(); } });
+  const ask = (text, onYes, el) => { const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null; setConfirm({ text, rect, onYes: async () => { setConfirm(null); await onYes(); } }); };
   const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
 
-  const doDeletePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }); };
+  const doDeletePhotos = (e) => { const items = photoPool().filter((m) => sel.has(m.uri)); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }, e && e.currentTarget); };
   const doSharePhotos = () => { const items = photoPool().filter((m) => sel.has(m.uri)); if (items[0]) Apps.share({ uri: items[0].uri, mime: items[0].video ? "video/*" : "image/*" }).catch(() => {}); exitSel(); };
   const doRestore = () => { const items = trashItems.filter((m) => sel.has(m.uri)); exitSel(); restoreTrash(items); };
-  const doDeleteForever = () => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", () => { exitSel(); deleteForever(items); }); };
+  const doDeleteForever = (e) => { const items = trashItems.filter((m) => sel.has(m.uri)); if (!items.length) return; ask("Удалить навсегда?", () => { exitSel(); deleteForever(items); }, e && e.currentTarget); };
   const doHideAlbums = () => {
     const list = albums.filter((a) => sel.has(a.key)); exitSel();
     const uris = new Set(); const moved = []; const jobs = [];
     for (const a of list) { for (const p of a.paths) jobs.push(() => Apps.setNomedia({ path: "file://" + p, on: true })); for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
-    setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => [...moved, ...hs]); runJobs(jobs);
+    setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => dedup([...moved, ...hs])); runJobs(jobs);
   };
   const doShowAlbums = () => {
     const list = hiddenAlbums.filter((a) => sel.has(a.key)); exitSel();
     const uris = new Set(); const moved = []; const jobs = [];
     for (const a of list) { for (const p of a.paths) jobs.push(() => Apps.setNomedia({ path: "file://" + p, on: false })); for (const it of a.items) { uris.add(it.uri); moved.push(it); } }
-    setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => [...moved, ...ms]); runJobs(jobs);
+    setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => dedup([...moved, ...ms])); runJobs(jobs);
   };
-  const doDeleteAlbums = () => {
+  const doDeleteAlbums = (e) => {
     const pool = section === "hidden" ? hiddenAlbums : albums;
     const list = pool.filter((a) => sel.has(a.key)); if (!list.length) return;
     let all = []; for (const a of list) all = all.concat(a.items);
-    ask("Удалить альбомы в корзину?", () => { exitSel(); moveToTrash(all); });
+    ask("Удалить альбомы в корзину?", () => { exitSel(); moveToTrash(all); }, e && e.currentTarget);
   };
 
   /* ---- вьювер ---- */
@@ -293,20 +310,28 @@ export default function App() {
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
-  const viewerDeleteOne = () => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", () => { removeFromViewer(); if (isTrash) deleteForever([cur]); else moveToTrash([cur]); }); };
+  const viewerDeleteOne = (e) => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", () => { removeFromViewer(); if (isTrash) deleteForever([cur]); else moveToTrash([cur]); }, e && e.currentTarget); };
   const viewerRestoreOne = () => { if (!vCur) return; const cur = vCur; removeFromViewer(); restoreTrash([cur]); };
 
   /* ---- секции ---- */
   const trashTapRef = useRef(0);
-  const goSection = (s) => {
+  const goSection = (s, e) => {
     if (s === "trash") {
       const now = Date.now();
-      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", () => { deleteForever(trashItems); }); return; }
+      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", () => { deleteForever(trashItems); }, e && e.currentTarget); return; }
       trashTapRef.current = now; loadTrash();
     }
     exitSel(); setAlbumKey(null); setSection(s);
   };
-  const enterHidden = () => { buzz(20); exitSel(); setAlbumKey(null); setSection("hidden"); };
+  const enterHidden = () => {
+    buzz(20); exitSel(); setAlbumKey(null); setSection("hidden");
+    (async () => {
+      if (!hiddenLoaded.current) {
+        try { const c = await Apps.cacheGet({ key: "hidden" }); if (c && c.data) { const j = JSON.parse(c.data); setHiddenItems(dedup(j.items || [])); hiddenLoaded.current = true; } } catch {}
+      }
+      scanHidden(hiddenLoaded.current);
+    })();
+  };
 
   /* ================= РЕНДЕР ================= */
   const headerTitle = album ? album.name : section === "albums" ? "Альбомы" : section === "all" ? "Все" : section === "video" ? "Видео" : section === "trash" ? "Корзина" : "Скрытые";
@@ -357,7 +382,7 @@ export default function App() {
         ) : section === "albums" ? (
           <AlbumsView albums={albums} {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : section === "hidden" ? (
-          <AlbumsView albums={hiddenAlbums} hidden {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
+          (loadingHidden && !hiddenItems.length) ? <div style={{ padding: 40, textAlign: "center", color: SUB, fontSize: 14 }}>Сканирование…</div> : <AlbumsView albums={hiddenAlbums} hidden {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : section === "all" ? (
           <PhotoGrid items={allPhotos} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Нет фотографий" />
         ) : section === "video" ? (
@@ -383,7 +408,7 @@ export default function App() {
               const act = section === s.id;
               return (
                 <button key={s.id}
-                  onClick={() => { if (s.id === "albums" && holdRef.fired) { holdRef.fired = false; return; } goSection(s.id); }}
+                  onClick={(e) => { if (s.id === "albums" && holdRef.fired) { holdRef.fired = false; return; } goSection(s.id, e); }}
                   onContextMenu={(e) => { e.preventDefault(); if (s.id === "albums") enterHidden(); }}
                   onTouchStart={s.id === "albums" ? () => { holdRef.fired = false; holdRef.t = setTimeout(() => { holdRef.fired = true; enterHidden(); }, 550); } : undefined}
                   onTouchEnd={s.id === "albums" ? () => clearTimeout(holdRef.t) : undefined}
@@ -441,7 +466,7 @@ export default function App() {
                 ? [[I.restore, "Восстановить", viewerRestoreOne, false], [I.trash, "Удалить", viewerDeleteOne, true]]
                 : [[I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: vCur.video ? "video/*" : "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.trash, "Удалить", viewerDeleteOne, true]]
               ).map(([ic, lbl, fn, red], i) => (
-                <span key={i} onClick={fn} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: red ? "#FF6B6B" : "#fff", minWidth: 60 }}>
+                <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: red ? "#FF6B6B" : "#fff", minWidth: 60 }}>
                   <Svg d={ic} size={23} /><span style={{ fontSize: 11 }}>{lbl}</span>
                 </span>
               ))}
@@ -450,18 +475,31 @@ export default function App() {
         </div>
       )}
 
-      {/* ===== подтверждение Да/Нет — по центру (как в YevFiles, палец не закрывает) ===== */}
-      {confirm && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1600, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setConfirm(null)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: BAR, borderRadius: 16, padding: 20, width: "80%", maxWidth: 320, boxShadow: "0 18px 48px rgba(0,0,0,.6)" }}>
-            <div style={{ color: TXT, fontSize: 16, fontWeight: 600, marginBottom: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => setConfirm(null)} style={{ background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 20px" }}>Нет</button>
-              <button onClick={confirm.onYes} style={{ background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 22px" }}>Да</button>
+      {/* ===== подтверждение Да/Нет — аккуратный popup прямо над кнопкой удаления ===== */}
+      {confirm && (() => {
+        const W = 196, rect = confirm.rect;
+        let pos, arrow;
+        if (rect) {
+          const left = Math.min(Math.max(rect.left + rect.width / 2 - W / 2, 8), window.innerWidth - W - 8);
+          pos = { position: "fixed", left, bottom: window.innerHeight - rect.top + 10, width: W };
+          arrow = Math.min(Math.max(rect.left + rect.width / 2 - left - 8, 14), W - 30);
+        } else {
+          pos = { position: "fixed", left: "50%", bottom: "50%", transform: "translate(-50%,50%)", width: W };
+        }
+        return (
+          <>
+            <div onClick={() => setConfirm(null)} style={{ position: "fixed", inset: 0, zIndex: 1590 }} />
+            <div style={{ ...pos, zIndex: 1600, background: BAR, border: "1px solid " + LINE, borderRadius: 14, padding: "12px 12px 10px", boxShadow: "0 10px 30px rgba(0,0,0,.5)" }}>
+              <div style={{ color: TXT, fontSize: 14, fontWeight: 600, marginBottom: 10, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setConfirm(null)} style={{ flex: 1, background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 0" }}>Нет</button>
+                <button onClick={confirm.onYes} style={{ flex: 1, background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 0" }}>Да</button>
+              </div>
+              {rect && <div style={{ position: "absolute", bottom: -8, left: arrow, width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid var(--bar)" }} />}
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -543,7 +581,7 @@ function Toolbar({ items, disabled }) {
   return (
     <div style={{ display: "flex", background: "var(--bar)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 20px rgba(0,0,0,.35)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       {items.map(([ic, lbl, fn, red], i) => (
-        <span key={i} onClick={fn} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: red ? "var(--red)" : "var(--txt)", minWidth: 84, padding: "2px 10px" }}>
+        <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: red ? "var(--red)" : "var(--txt)", minWidth: 84, padding: "2px 10px" }}>
           <Svg d={ic} size={22} /><span style={{ fontSize: 11 }}>{lbl}</span>
         </span>
       ))}
