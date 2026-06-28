@@ -432,7 +432,7 @@ export default function App() {
       </div>
 
       {/* ===== нижняя зона (оверлей поверх фото) ===== */}
-      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {selMode === "album" ? (
           <Toolbar items={section === "hidden"
             ? [[I.eye, "Показать", doShowAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]
@@ -442,7 +442,7 @@ export default function App() {
             ? [[I.restore, "Восстановить", doRestore, false], [I.trash, "Удалить", doDeleteForever, true]]
             : [[I.share, "Поделиться", doSharePhotos, false], [I.trash, "Удалить", doDeletePhotos, true]]} disabled={sel.size === 0} />
         ) : showNav ? (
-          <div style={{ pointerEvents: "auto", display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid " + LINE, borderRadius: 30, padding: 5, gap: 2, boxShadow: "0 6px 22px rgba(0,0,0,.4)" }}>
+          <div style={{ display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid " + LINE, borderRadius: 30, padding: 5, gap: 2, boxShadow: "0 6px 22px rgba(0,0,0,.4)" }}>
             {SECS.map((s) => {
               const act = section === s.id;
               return (
@@ -649,7 +649,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
 /* ===== нижний тулбар выделения ===== */
 function Toolbar({ items, disabled }) {
   return (
-    <div style={{ pointerEvents: "auto", display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 22px rgba(0,0,0,.4)", opacity: disabled ? 0.4 : 1 }}>
+    <div style={{ display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 22px rgba(0,0,0,.4)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       {items.map(([ic, lbl, fn, red], i) => (
         <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: red ? "var(--red)" : "var(--txt)", minWidth: 84, padding: "2px 10px" }}>
           <Svg d={ic} size={22} /><span style={{ fontSize: 11 }}>{lbl}</span>
