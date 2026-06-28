@@ -49,16 +49,15 @@ public class AppsPlugin extends Plugin {
     //   .nofolder — игнорируются только файлы этой папки, подпапки сканируются как обычно.
     @PluginMethod
     public void scanMedia(PluginCall call) {
-        // в фоновом потоке — чтобы не блокировать UI на больших хранилищах
+        final boolean wantHidden = "hidden".equals(call.getString("mode", "visible"));
+        // в фоновом потоке — чтобы не блокировать UI
         new Thread(() -> {
             try {
                 File root = Environment.getExternalStorageDirectory();
-                JSArray vis = new JSArray();
-                JSArray hid = new JSArray();
-                walk(root, false, vis, hid, 0);
+                JSArray out = new JSArray();
+                walk(root, false, wantHidden, out, 0);
                 JSObject ret = new JSObject();
-                ret.put("items", vis);
-                ret.put("hidden", hid);
+                ret.put("items", out);
                 ret.put("root", root.getAbsolutePath());
                 call.resolve(ret);
             } catch (Exception e) { call.reject(e.getMessage()); }
@@ -66,12 +65,12 @@ public class AppsPlugin extends Plugin {
     }
 
     // ===== Кэш списка медиа на диске (приватная папка приложения, без лимитов localStorage) =====
-    private File cacheFile() { return new File(getContext().getExternalFilesDir(null), "media_cache.json"); }
+    private File cacheFile(String key) { String k = (key == null || key.isEmpty()) ? "media" : key.replaceAll("[^a-zA-Z0-9_]", "_"); File d = getContext().getExternalFilesDir(null); if (d == null) d = getContext().getFilesDir(); return new File(d, "cache_" + k + ".json"); }
 
     @PluginMethod
     public void cacheGet(PluginCall call) {
         try {
-            File f = cacheFile();
+            File f = cacheFile(call.getString("key", "media"));
             JSObject ret = new JSObject();
             if (f.exists()) ret.put("data", new String(readAll(new FileInputStream(f)), "UTF-8"));
             call.resolve(ret);
@@ -81,17 +80,20 @@ public class AppsPlugin extends Plugin {
     @PluginMethod
     public void cacheSet(PluginCall call) {
         final String data = call.getString("data", "");
+        final String key = call.getString("key", "media");
         new Thread(() -> {
-            try { FileOutputStream o = new FileOutputStream(cacheFile()); o.write(data.getBytes("UTF-8")); o.close(); } catch (Exception ignored) {}
+            try { FileOutputStream o = new FileOutputStream(cacheFile(key)); o.write(data.getBytes("UTF-8")); o.close(); } catch (Exception ignored) {}
             call.resolve(new JSObject());
         }).start();
     }
 
-    private void walk(File dir, boolean insideNomedia, JSArray vis, JSArray hid, int depth) {
+    private void walk(File dir, boolean insideNomedia, boolean wantHidden, JSArray out, int depth) {
         if (dir == null || depth > 12) return;
         File[] kids = dir.listFiles();
         if (kids == null) return;
         boolean branchHidden = insideNomedia || new File(dir, ".nomedia").exists();
+        // в обычном режиме НЕ заходим в скрытые ветки вовсе — это даёт мгновенный старт
+        if (!wantHidden && branchHidden) return;
         boolean noFolder = new File(dir, ".nofolder").exists(); // игнор файлов только этой папки
         for (File k : kids) {
             String name = k.getName();
@@ -99,10 +101,11 @@ public class AppsPlugin extends Plugin {
             if (k.isDirectory()) {
                 String dn = k.getName();
                 if (dir.getName().equals("Android") && (dn.equals("data") || dn.equals("obb"))) continue; // огромные/недоступные ветки
-                walk(k, branchHidden, vis, hid, depth + 1);
+                walk(k, branchHidden, wantHidden, out, depth + 1);
             } else {
                 boolean vid = isVid(name);
                 if (!isImg(name) && !vid) continue;
+                if (wantHidden && !branchHidden) continue;   // режим скрытых: только из .nomedia-веток
                 if (!branchHidden && noFolder) continue;     // .nofolder — пропускаем файлы этой папки
                 File p = k.getParentFile();
                 JSObject o = new JSObject();
@@ -113,7 +116,7 @@ public class AppsPlugin extends Plugin {
                 o.put("video", vid);
                 o.put("bucketPath", p != null ? p.getAbsolutePath() : "");
                 o.put("bucketName", p != null ? p.getName() : "");
-                (branchHidden ? hid : vis).put(o);
+                out.put(o);
             }
         }
     }
@@ -172,7 +175,7 @@ public class AppsPlugin extends Plugin {
                 android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
                 o.inJustDecodeBounds = true;
                 android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-                int s = 1; while (o.outWidth / s > 960 || o.outHeight / s > 960) s *= 2;
+                int s = 1; while (o.outWidth / s > 800 || o.outHeight / s > 800) s *= 2;
                 android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
                 o2.inSampleSize = s;
                 b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
@@ -186,9 +189,9 @@ public class AppsPlugin extends Plugin {
             }
             if (b == null) { call.resolve(ret); return; }
             int mx = Math.max(b.getWidth(), b.getHeight());
-            if (mx > 512) { float sc = 512f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
+            if (mx > 400) { float sc = 400f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            b.compress(Bitmap.CompressFormat.JPEG, 88, out);
+            b.compress(Bitmap.CompressFormat.JPEG, 85, out);
             byte[] bytes = out.toByteArray();
             try { OutputStream fos = new FileOutputStream(cacheFile); fos.write(bytes); fos.close(); } catch (Exception ignored) {}
             ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP));
