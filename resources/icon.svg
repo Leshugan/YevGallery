@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#1C140C"/>
+  <g transform="translate(512,512)">
+    <!-- четырёхлепестковая «вертушка» в духе Google Photos / Aves, в шоколадно-оранжевой палитре -->
+    <path d="M0 -200 A200 200 0 0 1 200 0 L70 0 A70 70 0 0 0 0 -70 Z" fill="#EF6C00"/>
+    <path d="M200 0 A200 200 0 0 1 0 200 L0 70 A70 70 0 0 0 70 0 Z" fill="#F5A623"/>
+    <path d="M0 200 A200 200 0 0 1 -200 0 L-70 0 A70 70 0 0 0 0 70 Z" fill="#E0573F"/>
+    <path d="M-200 0 A200 200 0 0 1 0 -200 L0 -70 A70 70 0 0 0 -70 0 Z" fill="#C9851F"/>
+    <circle cx="0" cy="0" r="44" fill="#F2EAE0"/>
+  </g>
+</svg>
