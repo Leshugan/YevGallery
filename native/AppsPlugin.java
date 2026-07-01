@@ -116,6 +116,7 @@ public class AppsPlugin extends Plugin {
                 o.put("video", vid);
                 o.put("bucketPath", p != null ? p.getAbsolutePath() : "");
                 o.put("bucketName", p != null ? p.getName() : "");
+                o.put("thumb", new File(thumbDir(), thumbKey(k) + ".jpg").getAbsolutePath());
                 out.put(o);
             }
         }
@@ -138,6 +139,7 @@ public class AppsPlugin extends Plugin {
                 o.put("size", k.length());
                 o.put("mtime", k.lastModified());
                 o.put("video", isVid(k.getName()));
+                o.put("thumb", new File(thumbDir(), thumbKey(k) + ".jpg").getAbsolutePath());
                 arr.put(o);
             }
             JSObject ret = new JSObject(); ret.put("files", arr); call.resolve(ret);
