@@ -157,21 +157,12 @@ public class AppsPlugin extends Plugin {
         return Integer.toHexString(base.hashCode()) + "_" + src.lastModified();
     }
 
-    @PluginMethod
-    public void thumb(PluginCall call) {
-        String uriStr = call.getString("uri");
-        if (uriStr == null) { call.reject("no uri"); return; }
+    // генерирует превью в кэш (если нет) и возвращает файл кэша, либо null
+    private File ensureThumb(File f) {
         try {
-            File f = toFile(uriStr);
-            if (!f.exists()) { call.resolve(new JSObject()); return; }
+            if (f == null || !f.exists()) return null;
             File cacheFile = new File(thumbDir(), thumbKey(f) + ".jpg");
-            JSObject ret = new JSObject();
-            if (cacheFile.exists()) {
-                byte[] data = readAll(new FileInputStream(cacheFile));
-                ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(data, Base64.NO_WRAP));
-                try { android.graphics.BitmapFactory.Options bo = new android.graphics.BitmapFactory.Options(); bo.inJustDecodeBounds = true; android.graphics.BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), bo); ret.put("w", bo.outWidth); ret.put("h", bo.outHeight); } catch (Exception ignored) {}
-                call.resolve(ret); return;
-            }
+            if (cacheFile.exists()) return cacheFile;
             String name = f.getName().toLowerCase();
             Bitmap b = null;
             if (isImg(name)) {
@@ -191,17 +182,49 @@ public class AppsPlugin extends Plugin {
                     try { r.release(); } catch (Throwable ignored) {}
                 }
             }
-            if (b == null) { call.resolve(ret); return; }
+            if (b == null) return null;
             int mx = Math.max(b.getWidth(), b.getHeight());
             if (mx > 512) { float sc = 512f / mx; b = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * sc), Math.round(b.getHeight() * sc), true); }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             b.compress(Bitmap.CompressFormat.JPEG, 86, out);
-            byte[] bytes = out.toByteArray();
-            try { OutputStream fos = new FileOutputStream(cacheFile); fos.write(bytes); fos.close(); } catch (Exception ignored) {}
-            ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP));
-            ret.put("w", b.getWidth()); ret.put("h", b.getHeight());
+            OutputStream fos = new FileOutputStream(cacheFile); fos.write(out.toByteArray()); fos.close();
+            return cacheFile;
+        } catch (Throwable t) { return null; }
+    }
+
+    @PluginMethod
+    public void thumb(PluginCall call) {
+        String uriStr = call.getString("uri");
+        if (uriStr == null) { call.reject("no uri"); return; }
+        try {
+            File cacheFile = ensureThumb(toFile(uriStr));
+            JSObject ret = new JSObject();
+            if (cacheFile == null || !cacheFile.exists()) { call.resolve(ret); return; }
+            byte[] data = readAll(new FileInputStream(cacheFile));
+            ret.put("thumb", "data:image/jpeg;base64," + Base64.encodeToString(data, Base64.NO_WRAP));
+            try { android.graphics.BitmapFactory.Options bo = new android.graphics.BitmapFactory.Options(); bo.inJustDecodeBounds = true; android.graphics.BitmapFactory.decodeFile(cacheFile.getAbsolutePath(), bo); ret.put("w", bo.outWidth); ret.put("h", bo.outHeight); } catch (Exception ignored) {}
             call.resolve(ret);
         } catch (Exception e) { call.resolve(new JSObject()); }
+    }
+
+    // фоновый прогрев превью (чтобы альбомы открывались мгновенно)
+    private Thread warmThread;
+    @PluginMethod
+    public void warmThumbs(PluginCall call) {
+        JSArray a = call.getArray("uris");
+        final java.util.List<String> uris = new java.util.ArrayList<>();
+        if (a != null) { try { for (Object o : a.toList()) uris.add(String.valueOf(o)); } catch (Exception ignored) {} }
+        call.resolve();
+        if (warmThread != null && warmThread.isAlive()) warmThread.interrupt();
+        warmThread = new Thread(() -> {
+            for (String u : uris) {
+                if (Thread.currentThread().isInterrupted()) return;
+                try { ensureThumb(toFile(u)); } catch (Throwable ignored) {}
+                try { Thread.sleep(3); } catch (InterruptedException e) { return; }
+            }
+        });
+        warmThread.setPriority(Thread.MIN_PRIORITY);
+        warmThread.start();
     }
 
     // ===== Удалить (насовсем) =====
