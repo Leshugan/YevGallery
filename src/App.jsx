@@ -65,6 +65,7 @@ const tq = []; let tActive = 0; const T_MAX = 6;
 const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(); tActive++; j().finally(() => { tActive--; tPump(); }); } };
 const tEnqueue = (j) => { tq.push(j); tPump(); };
 const thumbCache = new Map();
+const cacheThumb = (k, v) => { thumbCache.set(k, v); if (thumbCache.size > 500) { const first = thumbCache.keys().next().value; thumbCache.delete(first); } };
 const clampAR = (r) => { const n = Number(r); return (isFinite(n) && n > 0) ? Math.min(Math.max(n, 0.45), 2.4) : 1; };
 
 function Thumb({ uri, video, ar, square }) {
@@ -81,7 +82,7 @@ function Thumb({ uri, video, ar, square }) {
   }, []);
   useEffect(() => {
     if (!vis || src) return; let live = true;
-    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = clampAR((r && r.w > 0 && r.h > 0) ? r.w / r.h : 1); thumbCache.set(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
+    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = clampAR((r && r.w > 0 && r.h > 0) ? r.w / r.h : 1); cacheThumb(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
     return () => { live = false; };
   }, [vis, uri]);
   return (
@@ -237,6 +238,16 @@ export default function App() {
   useEffect(() => { ls.set(GRIDKEY, gridMode); }, [gridMode]);
   // прогрев скрытых в фоне ПОСЛЕ загрузки основных (чтобы вход в «Скрытые» был мгновенным)
   useEffect(() => { if (loading || hiddenLoaded.current) return; const id = setTimeout(() => scanHidden(true), 1500); return () => clearTimeout(id); }, [loading, scanHidden]);
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (loading || warmed.current || !media.length) return;
+    warmed.current = true;
+    const covers = albums.map((a) => a.items[0] && a.items[0].uri).filter(Boolean);
+    const rest = [...media].sort((a, b) => b.mtime - a.mtime).map((m) => m.uri);
+    const uris = [...new Set([...covers, ...rest])];
+    const id = setTimeout(() => { Apps.warmThumbs({ uris }).catch(() => {}); }, 600);
+    return () => clearTimeout(id);
+  }, [loading, media, albums]);
   // возврат в приложение: фоновое обновление, без экрана загрузки и не чаще раза в 20с
   useEffect(() => {
     const sub = CapApp.addListener("appStateChange", ({ isActive }) => { if (isActive) checkAccess().then((ok) => { if (ok && Date.now() - lastScan.current > 20000) { scan(true); if (hiddenLoaded.current) scanHidden(true); } }); });
@@ -564,7 +575,7 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
   return (
     <div
       onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, e.i, trash); }}
-      onContextMenu={(ev) => { ev.preventDefault(); if (!selMode) startSel("photo", m.uri); }}
+      onContextMenu={(ev) => ev.preventDefault()}
       onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
       onTouchEnd={() => clearTimeout(hold.current.t)}
       onTouchMove={() => clearTimeout(hold.current.t)}
@@ -625,7 +636,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
           return (
             <div key={a.key}
               onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode === "album") toggleSel(a.key); else setAlbumKey(a.key); }}
-              onContextMenu={(e) => { e.preventDefault(); startSel("album", a.key); }}
+              onContextMenu={(e) => e.preventDefault()}
               onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; startSel("album", a.key); }, 450); }}
               onTouchEnd={() => clearTimeout(hold.current.t)}
               onTouchMove={() => clearTimeout(hold.current.t)}
