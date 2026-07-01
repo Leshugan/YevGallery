@@ -146,7 +146,9 @@ public class AppsPlugin extends Plugin {
 
     // ===== Превью (фото и видео), кэш на диске =====
     private File thumbDir() {
-        File d = new File(Environment.getExternalStorageDirectory(), ".yg_thumbs");
+        File base = getContext().getExternalCacheDir();
+        if (base == null) base = getContext().getCacheDir();
+        File d = new File(base, "thumbs");
         if (!d.exists()) d.mkdirs();
         return d;
     }
