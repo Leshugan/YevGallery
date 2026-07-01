@@ -65,30 +65,26 @@ const tq = []; let tActive = 0; const T_MAX = 6;
 const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(); tActive++; j().finally(() => { tActive--; tPump(); }); } };
 const tEnqueue = (j) => { tq.push(j); tPump(); };
 const thumbCache = new Map();
+const thumbAR = new Map();
+const convFile = (p) => { try { return Capacitor.convertFileSrc(p && p.startsWith("file://") ? p : "file://" + p); } catch { return p; } };
 const cacheThumb = (k, v) => { thumbCache.set(k, v); if (thumbCache.size > 500) { const first = thumbCache.keys().next().value; thumbCache.delete(first); } };
 const clampAR = (r) => { const n = Number(r); return (isFinite(n) && n > 0) ? Math.min(Math.max(n, 0.45), 2.4) : 1; };
 
-function Thumb({ uri, video, ar, square }) {
-  const cached = thumbCache.get(uri);
-  const [src, setSrc] = useState(() => (cached && cached.src) || "");
-  const [ratio, setRatio] = useState(() => clampAR((cached && cached.ar) || ar || 1));
-  const [vis, setVis] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (src) return;
-    const el = ref.current; if (!el) return;
-    const io = new IntersectionObserver((ents) => { ents.forEach((e) => { if (e.isIntersecting) { setVis(true); io.disconnect(); } }); }, { rootMargin: "400px" });
-    io.observe(el); return () => io.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!vis || src) return; let live = true;
-    tEnqueue(() => Apps.thumb({ uri }).then((r) => { const v = r && r.thumb ? r.thumb : "x"; const rr = clampAR((r && r.w > 0 && r.h > 0) ? r.w / r.h : 1); cacheThumb(uri, { src: v, ar: rr }); if (live) { setSrc(v); setRatio(rr); } }).catch(() => { if (live) setSrc("x"); }));
-    return () => { live = false; };
-  }, [vis, uri]);
+function Thumb({ item, video, square }) {
+  const u = item.uri;
+  const tp = item.thumb ? convFile(item.thumb) : "";
+  const [dataUrl, setDataUrl] = useState("");
+  const [ratio, setRatio] = useState(() => (square ? 1 : clampAR(thumbAR.get(u) || 1)));
+  const [broken, setBroken] = useState(false);
+  const src = dataUrl || tp;
+  const onLoad = (e) => { if (dataUrl) return; const w = e.target.naturalWidth, h = e.target.naturalHeight; if (w && h) { const r = clampAR(w / h); thumbAR.set(u, r); if (!square) setRatio(r); } };
+  // файла превью ещё нет (не прогрет) — генерим через мост и показываем результат
+  const onErr = () => { if (dataUrl || broken) return; Apps.thumb({ uri: u }).then((r) => { if (r && r.thumb) { setDataUrl(r.thumb); if (r.w && r.h) { const rr = clampAR(r.w / r.h); thumbAR.set(u, rr); if (!square) setRatio(rr); } } else setBroken(true); }).catch(() => setBroken(true)); };
+  useEffect(() => { if (item.thumb || dataUrl || broken) return; let live = true; Apps.thumb({ uri: u }).then((r) => { if (!live) return; if (r && r.thumb) { setDataUrl(r.thumb); if (r.w && r.h && !square) { const rr = clampAR(r.w / r.h); thumbAR.set(u, rr); setRatio(rr); } } else setBroken(true); }).catch(() => { if (live) setBroken(true); }); return () => { live = false; }; }, [item.thumb]);
   return (
-    <div ref={ref} style={{ width: "100%", aspectRatio: square ? "1" : String(clampAR(ratio)), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
-      {src && src !== "x" && <img src={src} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none", WebkitUserDrag: "none", userSelect: "none" }} />}
-      {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
+    <div style={{ width: "100%", aspectRatio: square ? "1" : String(clampAR(ratio)), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
+      {src && !broken && <img src={src} alt="" loading="lazy" decoding="async" draggable={false} onLoad={onLoad} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none", WebkitUserDrag: "none", userSelect: "none" }} />}
+      {broken && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
       {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
     </div>
   );
@@ -581,7 +577,7 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
       onTouchMove={() => clearTimeout(hold.current.t)}
       onTouchCancel={() => { clearTimeout(hold.current.t); hold.current.fired = false; }}
       style={{ position: "relative", breakInside: "avoid", WebkitColumnBreakInside: "avoid", marginBottom: square ? 0 : 3, aspectRatio: square ? "1" : undefined, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
-      <Thumb uri={m.uri} video={m.video} square={square} />
+      <Thumb item={m} video={m.video} square={square} />
       {selMode && (
         <span style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 11, border: "2px solid #fff", background: on ? "var(--acc)" : "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>{on && <Svg d={I.check} size={14} />}</span>
       )}
@@ -643,7 +639,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
               onTouchCancel={() => { clearTimeout(hold.current.t); hold.current.fired = false; }}
               style={{ minWidth: 0 }}>
               <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
-                {cover ? <Thumb uri={cover.uri} video={cover.video} square />
+                {cover ? <Thumb item={cover} video={cover.video} square />
                   : <div style={{ width: "100%", aspectRatio: "1", background: "var(--row2)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--sub)" }}><Svg d={I.folder} size={34} /></div>}
                 {hidden && <span style={{ position: "absolute", top: 6, left: 6, color: "#fff", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.8))" }}><Svg d={I.eyeOff} size={16} /></span>}
                 {selMode === "album" && (
