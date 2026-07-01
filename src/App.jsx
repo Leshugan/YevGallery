@@ -345,7 +345,7 @@ export default function App() {
   };
 
   /* ---- вьювер ---- */
-  const openViewer = (items, idx, trash) => { setGridMenu(false); setConfirm(null); setViewer({ items, idx, trash: !!trash }); setBar(true); setDragX(0); };
+  const openViewer = (items, idx, trash) => { setGridMenu(false); setConfirm(null); setViewer({ items, idx, trash: !!trash }); setBar(false); setDragX(0); };
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
@@ -366,15 +366,11 @@ export default function App() {
   const vEnd = (e) => { const g = gz.current; for (const t of e.changedTouches) g.pts.delete(t.identifier); if (g.mode === "pinch") { if (g.scale <= 1.02) { g.scale = 1; g.tx = 0; g.ty = 0; } else vClampPan(); vApply(true); if (g.pts.size === 1) { const t = [...g.pts.values()][0]; g.sx = t.x; g.sy = t.y; g.bTx = g.tx; g.bTy = g.ty; g.mode = "pan"; } else if (g.pts.size === 0) g.mode = g.scale > 1 ? "pan" : "none"; return; } if (g.pts.size > 0) return; const dt = Date.now() - g.st0; if (g.mode === "undecided") { const now = Date.now(); if (now - g.lastTap < 280) { g.lastTap = 0; vToggleZoom(g.sx, g.sy); } else { g.lastTap = now; setBar((b) => !b); } g.mode = "none"; return; } if (g.mode === "close") { if (g.dragY > 110) { vCloseAnim(); } else { g.dragY = 0; g.dragX = 0; vApply(true); } g.mode = "none"; return; } if (g.mode === "nav") { const TH = Math.min(60, window.innerWidth * 0.12), flick = dt < 260 && Math.abs(g.dragX) > 30; let moved = false; if ((g.dragX < -TH || (flick && g.dragX < 0)) && viewer.idx < viewer.items.length - 1) { moved = true; viewerGo(1); } else if ((g.dragX > TH || (flick && g.dragX > 0)) && viewer.idx > 0) { moved = true; viewerGo(-1); } g.dragX = 0; if (!moved) vApply(true); g.mode = "none"; return; } if (g.mode === "pan") { vClampPan(); vApply(true); g.mode = g.scale > 1 ? "pan" : "none"; } };
 
   /* ---- секции ---- */
-  const trashTapRef = useRef(0);
   const goSection = (s, e) => {
-    if (s === "trash") {
-      const now = Date.now();
-      if (now - trashTapRef.current < 350) { trashTapRef.current = 0; ask("Очистить корзину?", () => { deleteForever(trashItems); }, e && e.currentTarget); return; }
-      trashTapRef.current = now; loadTrash();
-    }
+    if (s === "trash") loadTrash();
     exitSel(); setAlbumKey(null); setSection(s); setGridMenu(false); setConfirm(null); setInfo(null);
   };
+  const emptyTrashAsk = (el) => { if (!trashItems.length) return; ask("Очистить корзину?", () => { deleteForever(trashItems); }, el); };
   const enterHidden = () => {
     buzz(20); exitSel(); setAlbumKey(null); setSection("hidden");
     (async () => {
@@ -463,11 +459,12 @@ export default function App() {
               const act = section === s.id;
               return (
                 <button key={s.id}
-                  onClick={(e) => { if (s.id === "albums" && holdRef.fired) { holdRef.fired = false; return; } goSection(s.id, e); }}
-                  onContextMenu={(e) => { e.preventDefault(); if (s.id === "albums") enterHidden(); }}
-                  onTouchStart={s.id === "albums" ? () => { holdRef.fired = false; holdRef.t = setTimeout(() => { holdRef.fired = true; enterHidden(); }, 550); } : undefined}
-                  onTouchEnd={s.id === "albums" ? () => clearTimeout(holdRef.t) : undefined}
-                  onTouchMove={s.id === "albums" ? () => clearTimeout(holdRef.t) : undefined}
+                  onClick={(e) => { if (holdRef.fired) { holdRef.fired = false; return; } goSection(s.id, e); }}
+                  onContextMenu={(e) => { e.preventDefault(); if (s.id === "albums") enterHidden(); else if (s.id === "trash") emptyTrashAsk(e.currentTarget); }}
+                  onTouchStart={(s.id === "albums" || s.id === "trash") ? (e) => { const el = e.currentTarget; holdRef.fired = false; holdRef.t = setTimeout(() => { holdRef.fired = true; if (s.id === "albums") enterHidden(); else emptyTrashAsk(el); }, 550); } : undefined}
+                  onTouchEnd={(s.id === "albums" || s.id === "trash") ? () => clearTimeout(holdRef.t) : undefined}
+                  onTouchMove={(s.id === "albums" || s.id === "trash") ? () => clearTimeout(holdRef.t) : undefined}
+                  onTouchCancel={(s.id === "albums" || s.id === "trash") ? () => { clearTimeout(holdRef.t); holdRef.fired = false; } : undefined}
                   style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, border: "none", background: act ? ACC : "transparent", color: act ? "#fff" : SUB, borderRadius: 24, padding: "7px 14px", minWidth: 58, transition: "background .15s" }}>
                   <Svg d={s.icon} size={21} /><span style={{ fontSize: 10.5, fontWeight: act ? 700 : 500 }}>{s.label}</span>
                 </button>
@@ -531,8 +528,8 @@ export default function App() {
             <div style={{ ...pos, zIndex: 1600, background: BAR, border: "1px solid " + LINE, borderRadius: 14, padding: "12px 12px 10px", boxShadow: "0 10px 30px rgba(0,0,0,.5)" }}>
               <div style={{ color: TXT, fontSize: 14, fontWeight: 600, marginBottom: 10, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{confirm.text}</div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => setConfirm(null)} style={{ flex: 1, background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 0" }}>Нет</button>
                 <button onClick={confirm.onYes} style={{ flex: 1, background: RED, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, padding: "9px 0" }}>Да</button>
+                <button onClick={() => setConfirm(null)} style={{ flex: 1, background: ROW2, border: "1px solid " + LINE, borderRadius: 10, color: SUB, fontSize: 14, padding: "9px 0" }}>Нет</button>
               </div>
               {rect && <div style={{ position: "absolute", bottom: -8, left: arrow, width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid var(--bar)" }} />}
             </div>
@@ -590,31 +587,31 @@ function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash
   if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
   const indexed = items.map((m, i) => ({ m, i }));
   const pass = { items, selMode, sel, toggleSel, startSel, openViewer, trash, hold };
+  const classic = mode === "classic";
 
-  let body;
-  if (mode === "classic") {
-    const groups = [];
-    let cur = null;
-    for (const e of indexed) { const d = new Date(e.m.mtime); const key = d.getFullYear() + "-" + d.getMonth(); if (!cur || cur.key !== key) { cur = { key, label: monthLabel(e.m.mtime), entries: [] }; groups.push(cur); } cur.entries.push(e); }
-    body = (
-      <div style={{ padding: "0 4px 4px" }}>
-        {groups.map((g) => (
-          <div key={g.key}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--txt)", padding: "16px 6px 10px" }}>{g.label}</div>
+  // обе сетки разбиваем по месяцам
+  const groups = [];
+  let cur = null;
+  for (const e of indexed) { const d = new Date(e.m.mtime); const key = d.getFullYear() + "-" + d.getMonth(); if (!cur || cur.key !== key) { cur = { key, label: monthLabel(e.m.mtime), entries: [] }; groups.push(cur); } cur.entries.push(e); }
+
+  const body = (
+    <div style={{ padding: "0 4px 4px" }}>
+      {groups.map((g) => (
+        <div key={g.key}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--txt)", padding: "16px 6px 10px" }}>{g.label}</div>
+          {classic ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
               {g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} square {...pass} />)}
             </div>
-          </div>
-        ))}
-      </div>
-    );
-  } else {
-    body = (
-      <div style={{ columnCount: 3, columnGap: 3, padding: 4 }}>
-        {indexed.map((e) => <PhotoCell key={e.m.uri} e={e} {...pass} />)}
-      </div>
-    );
-  }
+          ) : (
+            <div style={{ columnCount: 3, columnGap: 3 }}>
+              {g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} {...pass} />)}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
   return <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>{body}</div>;
 }
 
