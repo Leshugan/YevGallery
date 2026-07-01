@@ -106,7 +106,9 @@ function classify(p, n) {
 const SPEC_ORDER = ["screenshots", "camera", "pictures", "whatsapp", "telegram"]; // [0] = правый нижний угол
 const SPEC_NAME = { screenshots: "Скриншоты", camera: "Камера", pictures: "Pictures", whatsapp: "WhatsApp", telegram: "Telegram" };
 
-function buildAlbums(items, isHidden) {
+function buildAlbums(items, mode) {
+  const isHidden = mode === "hidden";
+  const isVideo = mode === "video";
   const map = new Map();
   for (const it of items) {
     const sp = isHidden ? null : classify(it.bucketPath, it.bucketName);
@@ -118,14 +120,13 @@ function buildAlbums(items, isHidden) {
   }
   for (const a of map.values()) a.items.sort((x, y) => y.mtime - x.mtime);
   if (isHidden) return [...map.values()].sort((x, y) => x.items[0].mtime - y.items[0].mtime);
-  const seen = loadMap(SPECKEY);
-  for (const k of SPEC_ORDER) { const a = map.get(k); if (a) seen[k] = [...a.paths]; }
-  saveMap(SPECKEY, seen);
+  const seen = isVideo ? {} : loadMap(SPECKEY);
+  if (!isVideo) { for (const k of SPEC_ORDER) { const a = map.get(k); if (a) seen[k] = [...a.paths]; } saveMap(SPECKEY, seen); }
   const others = [...map.values()].filter((a) => !a.special).sort((x, y) => x.items[0].mtime - y.items[0].mtime);
   const specials = [];
   for (const k of SPEC_ORDER) {
     let a = map.get(k);
-    if (!a && seen[k] && seen[k].length) a = { key: k, name: SPEC_NAME[k], special: true, paths: new Set(seen[k]), items: [] };
+    if (!a && !isVideo && seen[k] && seen[k].length) a = { key: k, name: SPEC_NAME[k], special: true, paths: new Set(seen[k]), items: [] };
     if (a) specials.push(a);
   }
   return [...specials, ...others];
@@ -175,11 +176,13 @@ export default function App() {
   const hiddenLoaded = useRef(false);
   const dedup = (arr) => { const seen = new Set(); const out = []; for (const x of arr) { if (!seen.has(x.uri)) { seen.add(x.uri); out.push(x); } } return out; };
 
-  const albums = useMemo(() => buildAlbums(media, false), [media]);
-  const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, true), [hiddenItems]);
-  const allPhotos = useMemo(() => media.filter((m) => !m.video).sort((a, b) => b.mtime - a.mtime), [media]);
-  const allVideos = useMemo(() => media.filter((m) => m.video).sort((a, b) => b.mtime - a.mtime), [media]);
-  const albumPool = section === "hidden" ? hiddenAlbums : albums;
+  const photosOnly = useMemo(() => media.filter((m) => !m.video), [media]);
+  const videosOnly = useMemo(() => media.filter((m) => m.video), [media]);
+  const albums = useMemo(() => buildAlbums(photosOnly, false), [photosOnly]);
+  const videoAlbums = useMemo(() => buildAlbums(videosOnly, "video"), [videosOnly]);
+  const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, "hidden"), [hiddenItems]);
+  const allPhotos = useMemo(() => [...photosOnly].sort((a, b) => b.mtime - a.mtime), [photosOnly]);
+  const albumPool = section === "hidden" ? hiddenAlbums : section === "video" ? videoAlbums : albums;
   const album = albumKey ? albumPool.find((a) => a.key === albumKey) : null;
 
   /* ---- доступ + сканирование (с кэшем, без слепого пересканирования) ---- */
@@ -247,17 +250,20 @@ export default function App() {
     if (!albumKey && (section === "albums" || section === "hidden")) el.scrollTop = el.scrollHeight;
   }, [section, albumKey, albums, hiddenAlbums, media]);
 
+  const navRef = useRef({});
+  navRef.current = { confirm: !!confirm, viewer: !!viewer, selMode, albumKey, section };
   useEffect(() => {
     const sub = CapApp.addListener("backButton", () => {
-      if (confirm) { setConfirm(null); return; }
-      if (viewer) { setViewer(null); return; }
-      if (selMode) { exitSel(); return; }
-      if (albumKey) { setAlbumKey(null); return; }
-      if (section !== "albums") { setSection("albums"); return; }
+      const st = navRef.current;
+      if (st.confirm) { setConfirm(null); return; }
+      if (st.viewer) { setViewer(null); return; }
+      if (st.selMode) { exitSel(); return; }
+      if (st.albumKey) { setAlbumKey(null); return; }
+      if (st.section !== "albums") { setSection("albums"); return; }
       CapApp.exitApp();
     });
     return () => { sub.then((s) => s.remove()).catch(() => {}); };
-  });
+  }, []);
 
   /* ---- выделение ---- */
   const exitSel = () => { setSelMode(null); setSel(new Set()); };
@@ -303,7 +309,7 @@ export default function App() {
 
   /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
   const ask = (text, onYes, el) => { const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null; setConfirm({ text, rect, onYes: async () => { setConfirm(null); await onYes(); } }); };
-  const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? allVideos : section === "trash" ? trashItems : [];
+  const photoPool = () => album ? album.items : section === "all" ? allPhotos : section === "video" ? videosOnly : section === "trash" ? trashItems : [];
   const selPhotos = () => { const map = new Map(); for (const m of media) map.set(m.uri, m); for (const m of hiddenItems) map.set(m.uri, m); for (const m of trashItems) map.set(m.uri, m); return [...sel].map((u) => map.get(u)).filter(Boolean); };
 
   const doDeletePhotos = (e) => { const items = selPhotos(); if (!items.length) return; ask(items.length > 1 ? "Удалить " + items.length + "?" : "Удалить файл?", () => { exitSel(); moveToTrash(items); }, e && e.currentTarget); };
@@ -336,6 +342,19 @@ export default function App() {
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
   const viewerDeleteOne = (e) => { if (!vCur) return; const cur = vCur, isTrash = viewer.trash; ask("Удалить файл?", () => { removeFromViewer(); if (isTrash) deleteForever([cur]); else moveToTrash([cur]); }, e && e.currentTarget); };
   const viewerRestoreOne = () => { if (!vCur) return; const cur = vCur; removeFromViewer(); restoreTrash([cur]); };
+
+  // ---- жесты вьювера: пинч-зум, пан, свайп-навигация, свайп-вниз для закрытия ----
+  const stageRef = useRef(null), vbgRef = useRef(null);
+  const gz = useRef({ scale: 1, tx: 0, ty: 0, dragX: 0, dragY: 0, mode: "none", pts: new Map(), lastTap: 0, sx: 0, sy: 0, st0: 0, bTx: 0, bTy: 0, sScale: 1, sDist: 0, sMidX: 0, sMidY: 0 });
+  useEffect(() => { const g = gz.current; g.scale = 1; g.tx = 0; g.ty = 0; g.dragX = 0; g.dragY = 0; g.mode = "none"; g.pts.clear(); if (stageRef.current) { stageRef.current.style.transition = "none"; stageRef.current.style.transform = ""; } if (vbgRef.current) vbgRef.current.style.opacity = "1"; }, [vCur && vCur.uri]);
+  const vApply = (anim) => { const g = gz.current, st = stageRef.current; if (st) { st.style.transition = anim ? "transform .22s ease" : "none"; st.style.transform = "translate(" + (g.tx + g.dragX) + "px," + (g.ty + g.dragY) + "px) scale(" + g.scale + ")"; } if (vbgRef.current) vbgRef.current.style.opacity = String(Math.max(0, 1 - Math.abs(g.dragY) / 600)); };
+  const vDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const vClampPan = () => { const g = gz.current, w = window.innerWidth, h = window.innerHeight, mx = (g.scale - 1) * w / 2, my = (g.scale - 1) * h / 2; g.tx = Math.max(-mx, Math.min(mx, g.tx)); g.ty = Math.max(-my, Math.min(my, g.ty)); };
+  const vCloseAnim = () => { const st = stageRef.current; if (st) { st.style.transition = "transform .2s ease"; st.style.transform = "translateY(" + window.innerHeight + "px)"; } if (vbgRef.current) { vbgRef.current.style.transition = "opacity .2s"; vbgRef.current.style.opacity = "0"; } setTimeout(() => setViewer(null), 185); };
+  const vToggleZoom = (x, y) => { const g = gz.current; if (g.scale > 1) { g.scale = 1; g.tx = 0; g.ty = 0; } else { g.scale = 2.6; g.tx = (window.innerWidth / 2 - x) * (g.scale - 1); g.ty = (window.innerHeight / 2 - y) * (g.scale - 1); vClampPan(); } g.mode = g.scale > 1 ? "pan" : "none"; vApply(true); };
+  const vStart = (e) => { const g = gz.current; for (const t of e.changedTouches) g.pts.set(t.identifier, { x: t.clientX, y: t.clientY }); if (g.pts.size >= 2) { const [a, b] = [...g.pts.values()]; g.mode = "pinch"; g.sDist = vDist(a, b) || 1; g.sScale = g.scale; g.sMidX = (a.x + b.x) / 2; g.sMidY = (a.y + b.y) / 2; g.bTx = g.tx; g.bTy = g.ty; } else { const t = e.changedTouches[0]; g.sx = t.clientX; g.sy = t.clientY; g.st0 = Date.now(); g.dragX = 0; g.dragY = 0; g.bTx = g.tx; g.bTy = g.ty; g.mode = g.scale > 1 ? "pan" : "undecided"; } };
+  const vMove = (e) => { e.preventDefault(); const g = gz.current; for (const t of e.changedTouches) if (g.pts.has(t.identifier)) g.pts.set(t.identifier, { x: t.clientX, y: t.clientY }); if (g.mode === "pinch" && g.pts.size >= 2) { const [a, b] = [...g.pts.values()]; g.scale = Math.max(1, Math.min(4, g.sScale * vDist(a, b) / g.sDist)); g.tx = g.bTx + ((a.x + b.x) / 2 - g.sMidX); g.ty = g.bTy + ((a.y + b.y) / 2 - g.sMidY); vApply(false); return; } const t = e.changedTouches[0]; const dx = t.clientX - g.sx, dy = t.clientY - g.sy; if (g.mode === "pan") { g.tx = g.bTx + dx; g.ty = g.bTy + dy; vApply(false); return; } if (g.mode === "undecided" && Math.hypot(dx, dy) > 8) g.mode = (Math.abs(dy) > Math.abs(dx) && dy > 0) ? "close" : "nav"; if (g.mode === "nav") { g.dragX = dx; vApply(false); } else if (g.mode === "close") { g.dragY = Math.max(0, dy); g.dragX = dx * 0.25; vApply(false); } };
+  const vEnd = (e) => { const g = gz.current; for (const t of e.changedTouches) g.pts.delete(t.identifier); if (g.mode === "pinch") { if (g.scale <= 1.02) { g.scale = 1; g.tx = 0; g.ty = 0; } else vClampPan(); vApply(true); if (g.pts.size === 1) { const t = [...g.pts.values()][0]; g.sx = t.x; g.sy = t.y; g.bTx = g.tx; g.bTy = g.ty; g.mode = "pan"; } else if (g.pts.size === 0) g.mode = g.scale > 1 ? "pan" : "none"; return; } if (g.pts.size > 0) return; const dt = Date.now() - g.st0; if (g.mode === "undecided") { const now = Date.now(); if (now - g.lastTap < 280) { g.lastTap = 0; vToggleZoom(g.sx, g.sy); } else { g.lastTap = now; setBar((b) => !b); } g.mode = "none"; return; } if (g.mode === "close") { if (g.dragY > 110) { vCloseAnim(); } else { g.dragY = 0; g.dragX = 0; vApply(true); } g.mode = "none"; return; } if (g.mode === "nav") { const TH = Math.min(60, window.innerWidth * 0.12), flick = dt < 260 && Math.abs(g.dragX) > 30; let moved = false; if ((g.dragX < -TH || (flick && g.dragX < 0)) && viewer.idx < viewer.items.length - 1) { moved = true; viewerGo(1); } else if ((g.dragX > TH || (flick && g.dragX > 0)) && viewer.idx > 0) { moved = true; viewerGo(-1); } g.dragX = 0; if (!moved) vApply(true); g.mode = "none"; return; } if (g.mode === "pan") { vClampPan(); vApply(true); g.mode = g.scale > 1 ? "pan" : "none"; } };
 
   /* ---- секции ---- */
   const trashTapRef = useRef(0);
@@ -384,25 +403,13 @@ export default function App() {
             <>
               {(album || section === "hidden") && <button onClick={() => { if (album) setAlbumKey(null); else setSection("albums"); }} style={{ ...btnIcon, marginLeft: -8, background: "transparent" }}><Svg d={I.back} size={23} /></button>}
               <span style={{ flex: 1, fontSize: 17, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{headerTitle}</span>
-              {(album || section === "all" || section === "video" || section === "trash") && (
-                <button onClick={() => setGridMenu((v) => !v)} style={btnIconBg}><Svg d={gridMode === "classic" ? I.gclassic : I.gsize} size={21} /></button>
+              {(album || section === "all" || section === "trash") && (
+                <button onClick={() => setGridMode((m) => (m === "size" ? "classic" : "size"))} style={btnIconBg}><Svg d={gridMode === "classic" ? I.gclassic : I.gsize} size={21} /></button>
               )}
               <button onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} style={btnIconBg}><Svg d={theme === "dark" ? I.sun : I.moon} size={21} /></button>
             </>
           )}
         </div>
-        {gridMenu && (
-          <>
-            <div onClick={() => setGridMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 25 }} />
-            <div style={{ position: "absolute", right: 12, top: "calc(env(safe-area-inset-top) + 60px)", zIndex: 26, background: BAR, border: "1px solid " + LINE, borderRadius: 14, padding: 6, minWidth: 230, boxShadow: "0 12px 32px rgba(0,0,0,.5)" }}>
-              {[["size", I.gsize, "По размеру изображения"], ["classic", I.gclassic, "Классическая"]].map(([id, ic, lbl]) => (
-                <div key={id} onClick={() => { setGridMode(id); setGridMenu(false); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 12px", borderRadius: 10, background: gridMode === id ? "var(--accbg)" : "transparent", color: gridMode === id ? ACC : TXT }}>
-                  <Svg d={ic} size={20} /><span style={{ flex: 1, fontSize: 14, fontWeight: gridMode === id ? 700 : 500 }}>{lbl}</span>{gridMode === id && <Svg d={I.check} size={18} />}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </div>
 
       {!allFiles && (
@@ -425,7 +432,7 @@ export default function App() {
         ) : section === "all" ? (
           <PhotoGrid items={allPhotos} mode={gridMode} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Нет фотографий" />
         ) : section === "video" ? (
-          <PhotoGrid items={allVideos} mode={gridMode} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: false }} empty="Нет видео" />
+          <AlbumsView albums={videoAlbums} {...{ selMode, sel, toggleSel, startSel, setAlbumKey }} />
         ) : (
           <PhotoGrid items={trashItems} mode={gridMode} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: true }} empty="Корзина пуста" />
         )}
@@ -463,24 +470,16 @@ export default function App() {
 
       {/* ===== вьювер ===== */}
       {viewer && vCur && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1300, background: "#000", touchAction: "none", overflow: "hidden" }}>
+        <div ref={vbgRef} style={{ position: "fixed", inset: 0, zIndex: 1300, background: "#000", touchAction: "none", overflow: "hidden" }}>
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}
-            onTouchStart={(e) => { const t = e.touches[0]; vTouch.current = { x: t.clientX, y: t.clientY, t: Date.now() }; setDragging(true); }}
-            onTouchMove={(e) => { if (!vTouch.current) return; const t = e.touches[0]; const dx = t.clientX - vTouch.current.x, dy = t.clientY - vTouch.current.y; if (Math.abs(dx) > Math.abs(dy)) setDragX(dx); }}
-            onTouchEnd={(e) => {
-              setDragging(false); const v = vTouch.current; vTouch.current = null; if (!v) { setDragX(0); return; }
-              const t = e.changedTouches[0]; const dx = t.clientX - v.x, dy = t.clientY - v.y, dt = Date.now() - v.t;
-              if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && dt < 300) { setBar((b) => !b); setDragX(0); return; }
-              const TH = Math.min(60, window.innerWidth * 0.12), flick = dt < 260 && Math.abs(dx) > 30;
-              if ((dx < -TH || (flick && dx < 0)) && viewer.idx < viewer.items.length - 1) viewerGo(1);
-              else if ((dx > TH || (flick && dx > 0)) && viewer.idx > 0) viewerGo(-1);
-              setDragX(0);
-            }}>
-            {vCur.video ? (
-              <video key={vCur.uri} src={cfs(vCur.uri)} controls autoPlay style={{ maxWidth: "100%", maxHeight: "100%" }} />
-            ) : (
-              <img key={vCur.uri} src={cfs(vCur.uri)} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: "translateX(" + dragX + "px)", transition: dragging ? "none" : "transform .2s ease", pointerEvents: "none", userSelect: "none" }} />
-            )}
+            {...(vCur.video ? {} : { onTouchStart: vStart, onTouchMove: vMove, onTouchEnd: vEnd })}>
+            <div ref={stageRef} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", willChange: "transform" }}>
+              {vCur.video ? (
+                <video key={vCur.uri} src={cfs(vCur.uri)} controls autoPlay style={{ maxWidth: "100%", maxHeight: "100%" }} />
+              ) : (
+                <img key={vCur.uri} src={cfs(vCur.uri)} alt="" draggable={false} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", pointerEvents: "none", userSelect: "none" }} />
+              )}
+            </div>
           </div>
 
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, paddingTop: "env(safe-area-inset-top)", background: "linear-gradient(to bottom, rgba(0,0,0,.75), transparent)", transform: bar ? "translateY(0)" : "translateY(-110%)", transition: "transform .2s ease", pointerEvents: bar ? "auto" : "none" }}>
@@ -495,7 +494,7 @@ export default function App() {
                 ? [[I.restore, "Восстановить", viewerRestoreOne, false], [I.info, "Свойства", () => setInfo(vCur), false], [I.x, "Закрыть", () => setViewer(null), false], [I.trash, "Удалить", viewerDeleteOne, true]]
                 : vCur.video
                 ? [[I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "video/*" }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.x, "Закрыть", () => setViewer(null), false], [I.trash, "Удалить", viewerDeleteOne, true]]
-                : [[I.wall, "Обои", () => Apps.setWallpaper({ uri: vCur.uri }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.x, "Закрыть", () => setViewer(null), false], [I.trash, "Удалить", viewerDeleteOne, true]]
+                : [[I.wall, "Обои", () => Apps.setWallpaper({ uri: vCur.uri }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.trash, "Удалить", viewerDeleteOne, true]]
               ).map(([ic, lbl, fn, red], i) => (
                 <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: red ? "#FF6B6B" : "#fff", minWidth: 50 }}>
                   <Svg d={ic} size={22} /><span style={{ fontSize: 10.5 }}>{lbl}</span>
