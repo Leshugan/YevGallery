@@ -86,7 +86,7 @@ function Thumb({ uri, video, ar, square }) {
   }, [vis, uri]);
   return (
     <div ref={ref} style={{ width: "100%", aspectRatio: square ? "1" : String(clampAR(ratio)), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
-      {src && src !== "x" && <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+      {src && src !== "x" && <img src={src} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none", WebkitUserDrag: "none", userSelect: "none" }} />}
       {src === "x" && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
       {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
     </div>
@@ -254,13 +254,15 @@ export default function App() {
   navRef.current = { confirm: !!confirm, viewer: !!viewer, selMode, albumKey, section };
   useEffect(() => {
     const sub = CapApp.addListener("backButton", () => {
-      const st = navRef.current;
-      if (st.confirm) { setConfirm(null); return; }
-      if (st.viewer) { setViewer(null); return; }
-      if (st.selMode) { exitSel(); return; }
-      if (st.albumKey) { setAlbumKey(null); return; }
-      if (st.section !== "albums") { setSection("albums"); return; }
-      CapApp.exitApp();
+      setTimeout(() => {
+        const st = navRef.current;
+        if (st.confirm) { setConfirm(null); return; }
+        if (st.viewer) { setViewer(null); return; }
+        if (st.selMode) { exitSel(); return; }
+        if (st.albumKey) { setAlbumKey(null); return; }
+        if (st.section !== "albums") { setSection("albums"); return; }
+        CapApp.exitApp();
+      }, 0);
     });
     return () => { sub.then((s) => s.remove()).catch(() => {}); };
   }, []);
@@ -388,7 +390,7 @@ export default function App() {
 
   return (
     <div style={{ ...T, position: "fixed", inset: 0, background: BG, color: TXT, fontFamily: "system-ui, Roboto, sans-serif", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <style>{`html,body{margin:0;background:${T["--bg"]}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}`}</style>
+      <style>{`html,body{margin:0;background:${T["--bg"]}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}img{-webkit-user-drag:none;user-drag:none}`}</style>
 
       {/* ===== header (оверлей поверх фото, полупрозрачный) ===== */}
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 20, paddingTop: "env(safe-area-inset-top)" }}>
@@ -566,6 +568,7 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
       onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
       onTouchEnd={() => clearTimeout(hold.current.t)}
       onTouchMove={() => clearTimeout(hold.current.t)}
+      onTouchCancel={() => { clearTimeout(hold.current.t); hold.current.fired = false; }}
       style={{ position: "relative", breakInside: "avoid", WebkitColumnBreakInside: "avoid", marginBottom: square ? 0 : 3, aspectRatio: square ? "1" : undefined, borderRadius: 8, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
       <Thumb uri={m.uri} video={m.video} square={square} />
       {selMode && (
@@ -626,6 +629,7 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
               onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; startSel("album", a.key); }, 450); }}
               onTouchEnd={() => clearTimeout(hold.current.t)}
               onTouchMove={() => clearTimeout(hold.current.t)}
+              onTouchCancel={() => { clearTimeout(hold.current.t); hold.current.fired = false; }}
               style={{ minWidth: 0 }}>
               <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", outline: on ? "3px solid var(--acc)" : "none", outlineOffset: -3 }}>
                 {cover ? <Thumb uri={cover.uri} video={cover.video} square />
