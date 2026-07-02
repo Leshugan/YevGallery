@@ -341,7 +341,7 @@ export default function App() {
     setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); setMedia((ms) => dedup([...moved, ...ms])); runJobs(jobs);
   };
   const doDeleteAlbums = (e) => {
-    const pool = section === "hidden" ? hiddenAlbums : albums;
+    const pool = albumPool;
     const list = pool.filter((a) => sel.has(a.key)); if (!list.length) return;
     let all = []; for (const a of list) all = all.concat(a.items);
     ask("Удалить альбомы в корзину?", () => { exitSel(); moveToTrash(all); }, e && e.currentTarget);
