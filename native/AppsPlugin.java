@@ -148,9 +148,7 @@ public class AppsPlugin extends Plugin {
 
     // ===== Превью (фото и видео), кэш на диске =====
     private File thumbDir() {
-        File base = getContext().getExternalCacheDir();
-        if (base == null) base = getContext().getCacheDir();
-        File d = new File(base, "thumbs");
+        File d = new File(getContext().getCacheDir(), "thumbs");
         if (!d.exists()) d.mkdirs();
         return d;
     }
