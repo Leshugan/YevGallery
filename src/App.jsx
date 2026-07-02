@@ -447,7 +447,7 @@ export default function App() {
       </div>
 
       {/* ===== нижняя зона (оверлей поверх фото) ===== */}
-      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center", transform: (hideTop && !selMode) ? "translateY(130%)" : "translateY(0)", transition: "transform .25s ease" }}>
         {selMode === "album" ? (
           <Toolbar items={section === "hidden"
             ? [[I.selectAll, "Все", selectAllCur, false], [I.eye, "Показать", doShowAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]
