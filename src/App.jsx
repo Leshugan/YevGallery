@@ -143,7 +143,7 @@ export default function App() {
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
   const [root, setRoot] = useState("/storage/emulated/0");
-  const TRASH = root + "/.YevGalleryTrash";
+  const TRASH = root + "/Android/data/leshugan.yg/files/.trash";
 
   const [media, setMedia] = useState([]);
   const [hiddenItems, setHiddenItems] = useState([]);
