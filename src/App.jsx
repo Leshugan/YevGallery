@@ -164,6 +164,9 @@ export default function App() {
   const [gridMode, setGridMode] = useState(() => ls.get(GRIDKEY) || "size");
   const [gridMenu, setGridMenu] = useState(false);
   const [info, setInfo] = useState(null);
+  const [hideTop, setHideTop] = useState(false);
+  const lastY = useRef(0);
+  const onScroll = (e) => { const y = e.target.scrollTop, dy = y - lastY.current; if (y < 60) setHideTop(false); else if (dy > 6) setHideTop(true); else if (dy < -6) setHideTop(false); lastY.current = y; };
 
   const cfs = (u) => { try { return Capacitor.convertFileSrc(u); } catch { return u; } };
   const scrollRef = useRef(null);
@@ -370,6 +373,7 @@ export default function App() {
     if (s === "trash") loadTrash();
     exitSel(); setAlbumKey(null); setSection(s); setGridMenu(false); setConfirm(null); setInfo(null);
   };
+  const selectAllCur = () => { if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key))); else setSel(new Set(photoPool().map((m) => m.uri))); };
   const emptyTrashAsk = (el) => { if (!trashItems.length) return; ask("Очистить корзину?", () => { deleteForever(trashItems); }, el); };
   const enterHidden = () => {
     buzz(20); exitSel(); setAlbumKey(null); setSection("hidden");
@@ -396,12 +400,11 @@ export default function App() {
       <style>{`html,body{margin:0;background:${T["--bg"]}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}img{-webkit-user-drag:none;user-drag:none}`}</style>
 
       {/* ===== header (оверлей поверх фото, полупрозрачный) ===== */}
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 20, paddingTop: "env(safe-area-inset-top)" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 20, paddingTop: "env(safe-area-inset-top)", transform: hideTop ? "translateY(-130%)" : "translateY(0)", transition: "transform .25s ease" }}>
         <div style={{ height: 50, margin: "8px 8px 6px", borderRadius: 25, background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid " + LINE, display: "flex", alignItems: "center", gap: 6, padding: "0 8px 0 16px", boxShadow: "0 4px 16px -6px rgba(0,0,0,.4)" }}>
           {selMode ? (
             <>
               <span style={{ flex: 1, fontSize: 16, fontWeight: 600 }}>{sel.size}</span>
-              <button onClick={() => { if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key))); else setSel(new Set(photoPool().map((m) => m.uri))); }} style={btnIcon}><Svg d={I.selectAll} size={22} /></button>
               <button onClick={exitSel} style={btnIcon}><Svg d={I.x} size={22} /></button>
             </>
           ) : (
@@ -425,7 +428,7 @@ export default function App() {
       )}
 
       {/* ===== контент (под панелями, фото видны за ними при скролле) ===== */}
-      <div ref={scrollRef} style={{ position: "absolute", inset: 0, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", paddingTop: "calc(env(safe-area-inset-top) + 64px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 74px)" }}>
+      <div ref={scrollRef} onScroll={onScroll} style={{ position: "absolute", inset: 0, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", paddingTop: "calc(env(safe-area-inset-top) + 64px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 74px)" }}>
         {loading && !media.length ? (
           <div style={{ padding: 40, textAlign: "center", color: SUB, fontSize: 14 }}>Сканирование…</div>
         ) : album ? (
@@ -447,12 +450,12 @@ export default function App() {
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {selMode === "album" ? (
           <Toolbar items={section === "hidden"
-            ? [[I.eye, "Показать", doShowAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]
-            : [[I.eyeOff, "Скрыть", doHideAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]} disabled={sel.size === 0} />
+            ? [[I.selectAll, "Все", selectAllCur, false], [I.eye, "Показать", doShowAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]
+            : [[I.selectAll, "Все", selectAllCur, false], [I.eyeOff, "Скрыть", doHideAlbums, false], [I.trash, "Удалить", doDeleteAlbums, true]]} disabled={sel.size === 0} />
         ) : selMode === "photo" ? (
           <Toolbar items={section === "trash"
-            ? [[I.restore, "Восстановить", doRestore, false], [I.trash, "Удалить", doDeleteForever, true]]
-            : [[I.share, "Поделиться", doSharePhotos, false], [I.trash, "Удалить", doDeletePhotos, true]]} disabled={sel.size === 0} />
+            ? [[I.selectAll, "Все", selectAllCur, false], [I.restore, "Восстановить", doRestore, false], [I.trash, "Удалить", doDeleteForever, true]]
+            : [[I.selectAll, "Все", selectAllCur, false], [I.share, "Поделиться", doSharePhotos, false], [I.trash, "Удалить", doDeletePhotos, true]]} disabled={sel.size === 0} />
         ) : showNav ? (
           <div style={{ display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid " + LINE, borderRadius: 30, padding: 5, gap: 2, boxShadow: "0 6px 22px rgba(0,0,0,.4)" }}>
             {SECS.map((s) => {
