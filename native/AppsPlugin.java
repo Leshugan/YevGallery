@@ -331,6 +331,18 @@ public class AppsPlugin extends Plugin {
         try { getContext().getContentResolver().delete(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns.DATA + "=?", new String[]{ f.getAbsolutePath() }); } catch (Throwable ignored) {}
         try { getContext().sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f))); } catch (Throwable ignored) {}
     }
+    @PluginMethod
+    public void sysPaths(PluginCall call) {
+        JSObject ret = new JSObject();
+        try {
+            File base = getContext().getExternalFilesDir(null);
+            if (base == null) base = getContext().getFilesDir();
+            File tr = new File(base, ".trash"); if (!tr.exists()) tr.mkdirs();
+            ret.put("trash", tr.getAbsolutePath());
+        } catch (Throwable ignored) {}
+        try { ret.put("root", Environment.getExternalStorageDirectory().getAbsolutePath()); } catch (Throwable ignored) {}
+        call.resolve(ret);
+    }
     public void move(PluginCall call) {
         String from = call.getString("from");
         String to = call.getString("to");
