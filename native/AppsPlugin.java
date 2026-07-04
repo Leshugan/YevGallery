@@ -331,6 +331,30 @@ public class AppsPlugin extends Plugin {
         try { getContext().getContentResolver().delete(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns.DATA + "=?", new String[]{ f.getAbsolutePath() }); } catch (Throwable ignored) {}
         try { getContext().sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f))); } catch (Throwable ignored) {}
     }
+    private File trashDirF() { File base = getContext().getExternalFilesDir(null); if (base == null) base = getContext().getFilesDir(); File d = new File(base, ".trash"); if (!d.exists()) d.mkdirs(); return d; }
+    @PluginMethod
+    public void trashPut(PluginCall call) {
+        String from = call.getString("from"); if (from == null) { call.reject("no from"); return; }
+        try {
+            File src = toFile(from);
+            String tname = System.currentTimeMillis() + "_" + Math.abs(from.hashCode()) + "__" + src.getName();
+            File dst = new File(trashDirF(), tname);
+            boolean ok = src.renameTo(dst);
+            if (!ok) {
+                FileInputStream in = new FileInputStream(src); FileOutputStream o = new FileOutputStream(dst);
+                byte[] b = new byte[65536]; int r; while ((r = in.read(b)) > 0) o.write(b, 0, r); in.close(); o.close();
+                if (!src.delete()) deleteViaMediaStore(src);
+                ok = dst.exists();
+            }
+            JSObject ret = new JSObject(); ret.put("ok", ok); ret.put("uri", "file://" + dst.getAbsolutePath()); ret.put("name", tname); call.resolve(ret);
+        } catch (Exception e) { call.reject(e.getMessage()); }
+    }
+    @PluginMethod
+    public void trashList(PluginCall call) {
+        JSArray arr = new JSArray();
+        try { File[] ks = trashDirF().listFiles(); if (ks != null) for (File k : ks) { if (k.isDirectory()) continue; JSObject o = new JSObject(); o.put("uri", "file://" + k.getAbsolutePath()); o.put("name", k.getName()); o.put("size", k.length()); o.put("mtime", k.lastModified()); o.put("video", isVid(k.getName())); o.put("thumb", new File(thumbDir(), thumbKey(k) + ".jpg").getAbsolutePath()); putMeta(o, k, isVid(k.getName())); arr.put(o); } } catch (Throwable ignored) {}
+        JSObject ret = new JSObject(); ret.put("files", arr); call.resolve(ret);
+    }
     @PluginMethod
     public void sysPaths(PluginCall call) {
         JSObject ret = new JSObject();
