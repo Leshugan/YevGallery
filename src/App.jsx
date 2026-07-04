@@ -247,8 +247,7 @@ export default function App() {
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
   const [root, setRoot] = useState("/storage/emulated/0");
-  const [trashDir, setTrashDir] = useState("");
-  const TRASH = trashDir || (root + "/.YevGalleryTrash");
+  const TRASH = root + "/.YevGalleryTrash";
 
   const [media, setMedia] = useState([]);
   const [hiddenItems, setHiddenItems] = useState([]);
@@ -354,7 +353,6 @@ export default function App() {
   useEffect(() => { if (!hiddenLoaded.current) return; const id = setTimeout(() => persistCache("hidden", { items: hiddenItems }), 800); return () => clearTimeout(id); }, [hiddenItems]);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
   useEffect(() => { ls.set(GRIDKEY, gridMode); }, [gridMode]);
-  useEffect(() => { Apps.sysPaths().then((r) => { if (r && r.trash) setTrashDir(r.trash); }).catch(() => {}); }, []);
   // прогрев скрытых в фоне ПОСЛЕ загрузки основных (чтобы вход в «Скрытые» был мгновенным)
   useEffect(() => { if (loading || hiddenLoaded.current) return; const id = setTimeout(() => scanHidden(true), 1500); return () => clearTimeout(id); }, [loading, scanHidden]);
   useEffect(() => { if (!album || !album.items.length) return; const uris = [...new Set([...album.items.map((m) => m.uri), ...media.map((m) => m.uri)])]; const id = setTimeout(() => Apps.warmThumbs({ uris }).catch(() => {}), 100); return () => clearTimeout(id); }, [albumKey]);
