@@ -334,7 +334,7 @@ export default function App() {
   const loadTrash = useCallback(async () => {
     const meta = loadMap(TRASHMETA);
     try {
-      const r = await Apps.list({ uri: "file://" + TRASH });
+      const r = await Apps.trashList();
       const files = (r.files || []).map((f) => { const m = meta[baseName(f.uri)]; return { ...f, name: m ? m.name : f.name }; });
       files.sort((a, b) => b.mtime - a.mtime);
       setTrashItems(files);
@@ -415,18 +415,14 @@ export default function App() {
     setProgress(null);
   };
 
-  const moveToTrash = (items) => {
+  const moveToTrash = async (items) => {
     const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set();
     for (const it of items) {
-      const tname = Date.now() + "_" + Math.random().toString(36).slice(2, 7) + "__" + baseName(it.uri);
-      const to = "file://" + TRASH + "/" + tname;
-      meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime };
-      newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video });
-      uris.add(it.uri);
-      Apps.move({ from: it.uri, to }).catch(() => {});
+      try { const r = await Apps.trashPut({ from: it.uri }); if (r && r.ok !== false && r.uri) { meta[r.name] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: r.uri, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); uris.add(it.uri); } } catch {}
     }
     saveMap(TRASHMETA, meta);
-    removeUris(uris); setTrashItems((ts) => [...newT, ...ts]);
+    if (uris.size) removeUris(uris);
+    if (newT.length) setTrashItems((ts) => [...newT, ...ts]);
   };
   // восстановление: ждём move (обрабатываем коллизии имён по факту)
   const restoreTrash = async (items) => {
