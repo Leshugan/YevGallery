@@ -23,6 +23,7 @@ const isVidName = (n) => VID_EXT.has((n.split(".").pop() || "").toLowerCase());
 const MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const monthLabel = (ms) => { const d = new Date(ms); return MONTHS[d.getMonth()] + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : ""); };
 const fmtDate = (ms) => { try { return new Date(ms).toLocaleString("ru-RU"); } catch { return ""; } };
+const fmtDur = (ms) => { if (!ms) return ""; const t = Math.round(ms / 1000), m = Math.floor(t / 60), ss = t % 60; return m + ":" + (ss < 10 ? "0" : "") + ss; };
 const fmtSize = (b) => { if (b == null) return ""; const u = ["Б", "КБ", "МБ", "ГБ"]; let i = 0, n = b; while (n >= 1024 && i < 3) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + " " + u[i]; };
 const groupByMonth = (items) => { const g = []; let cur = null; for (const m of items) { const k = new Date(m.mtime); const key = k.getFullYear() + "-" + k.getMonth(); if (!cur || cur.key !== key) { cur = { key, label: monthLabel(m.mtime), items: [] }; g.push(cur); } cur.items.push(m); } return g; };
 
@@ -74,18 +75,20 @@ function Thumb({ item, video, square }) {
   const u = item.uri;
   const tp = item.thumb ? convFile(item.thumb) : "";
   const [dataUrl, setDataUrl] = useState("");
-  const [ratio, setRatio] = useState(() => (square ? 1 : clampAR(thumbAR.get(u) || 1)));
+  const [ratio, setRatio] = useState(() => (square ? 1 : clampAR((item.w && item.h) ? item.w / item.h : (thumbAR.get(u) || 1))));
   const [broken, setBroken] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = dataUrl || tp;
-  const onLoad = (e) => { if (dataUrl) return; const w = e.target.naturalWidth, h = e.target.naturalHeight; if (w && h) { const r = clampAR(w / h); thumbAR.set(u, r); if (!square) setRatio(r); } };
+  const onLoad = (e) => { setLoaded(true); const w = e.target.naturalWidth, h = e.target.naturalHeight; if (w && h) { const r = clampAR(w / h); thumbAR.set(u, r); if (!square && !item.w) setRatio(r); } };
   // файла превью ещё нет (не прогрет) — генерим через мост и показываем результат
   const onErr = () => { if (dataUrl || broken) return; Apps.thumb({ uri: u }).then((r) => { if (r && r.thumb) { setDataUrl(r.thumb); if (r.w && r.h) { const rr = clampAR(r.w / r.h); thumbAR.set(u, rr); if (!square) setRatio(rr); } } else setBroken(true); }).catch(() => setBroken(true)); };
   useEffect(() => { if (item.thumb || dataUrl || broken) return; let live = true; Apps.thumb({ uri: u }).then((r) => { if (!live) return; if (r && r.thumb) { setDataUrl(r.thumb); if (r.w && r.h && !square) { const rr = clampAR(r.w / r.h); thumbAR.set(u, rr); setRatio(rr); } } else setBroken(true); }).catch(() => { if (live) setBroken(true); }); return () => { live = false; }; }, [item.thumb]);
   return (
     <div style={{ width: "100%", aspectRatio: square ? "1" : String(clampAR(ratio)), background: ROW2, borderRadius: "inherit", overflow: "hidden", position: "relative" }}>
-      {src && !broken && <img src={src} alt="" loading="lazy" decoding="async" draggable={false} onLoad={onLoad} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none", WebkitUserDrag: "none", userSelect: "none" }} />}
+      {src && !broken && <img src={src} alt="" loading="lazy" decoding="async" draggable={false} onLoad={onLoad} onError={onErr} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none", WebkitUserDrag: "none", userSelect: "none", opacity: loaded ? 1 : 0, transition: "opacity .25s ease" }} />}
       {broken && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: SUB }}><Svg d={video ? I.video : I.img} size={30} /></div>}
       {video && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}><span style={{ display: "flex", color: "#fff", filter: "drop-shadow(0 1px 3px rgba(0,0,0,.7))" }}><Svg d={I.play} size={34} /></span></div>}
+      {video && item.dur ? <span style={{ position: "absolute", right: 5, bottom: 5, background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 10, fontWeight: 600, padding: "1px 5px", borderRadius: 6, pointerEvents: "none" }}>{fmtDur(item.dur)}</span> : null}
     </div>
   );
 }
@@ -165,8 +168,18 @@ export default function App() {
   const [gridMenu, setGridMenu] = useState(false);
   const [info, setInfo] = useState(null);
   const [hideTop, setHideTop] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [scrub, setScrub] = useState({ frac: 0, show: false, drag: false });
+  const scrubHide = useRef(null);
   const lastY = useRef(0);
-  const onScroll = (e) => { const y = e.target.scrollTop, dy = y - lastY.current; if (y < 60) setHideTop(false); else if (dy > 6) setHideTop(true); else if (dy < -6) setHideTop(false); lastY.current = y; };
+  const onScroll = (e) => {
+    const el = e.target, y = el.scrollTop, dy = y - lastY.current, max = el.scrollHeight - el.clientHeight;
+    if (y < 60) setHideTop(false); else if (dy > 6) setHideTop(true); else if (dy < -6) setHideTop(false);
+    lastY.current = y;
+    setScrub((sc) => ({ ...sc, frac: max > 0 ? y / max : 0, show: true }));
+    clearTimeout(scrubHide.current); scrubHide.current = setTimeout(() => setScrub((sc) => sc.drag ? sc : { ...sc, show: false }), 1200);
+  };
+  const scrubTo = (clientY) => { const el = scrollRef.current; if (!el) return; const r = el.getBoundingClientRect(), top = r.top + 70, bot = r.bottom - 90; let fr = (clientY - top) / (bot - top); fr = Math.max(0, Math.min(1, fr)); el.scrollTop = fr * (el.scrollHeight - el.clientHeight); };
 
   const cfs = (u) => { try { return Capacitor.convertFileSrc(u); } catch { return u; } };
   const scrollRef = useRef(null);
@@ -183,6 +196,7 @@ export default function App() {
   const hiddenAlbums = useMemo(() => buildAlbums(hiddenItems, "hidden"), [hiddenItems]);
   const allPhotos = useMemo(() => [...photosOnly].sort((a, b) => b.mtime - a.mtime), [photosOnly]);
   const albumPool = section === "hidden" ? hiddenAlbums : section === "video" ? videoAlbums : albums;
+  const curItems = albumKey ? (albumPool.find((a) => a.key === albumKey) || { items: [] }).items : section === "all" ? allPhotos : section === "trash" ? trashItems : [];
   const album = albumKey ? albumPool.find((a) => a.key === albumKey) : null;
 
   /* ---- доступ + сканирование (с кэшем, без слепого пересканирования) ---- */
@@ -237,6 +251,7 @@ export default function App() {
   useEffect(() => { ls.set(GRIDKEY, gridMode); }, [gridMode]);
   // прогрев скрытых в фоне ПОСЛЕ загрузки основных (чтобы вход в «Скрытые» был мгновенным)
   useEffect(() => { if (loading || hiddenLoaded.current) return; const id = setTimeout(() => scanHidden(true), 1500); return () => clearTimeout(id); }, [loading, scanHidden]);
+  useEffect(() => { if (!album || !album.items.length) return; const uris = [...new Set([...album.items.map((m) => m.uri), ...media.map((m) => m.uri)])]; const id = setTimeout(() => Apps.warmThumbs({ uris }).catch(() => {}), 100); return () => clearTimeout(id); }, [albumKey]);
   const warmed = useRef(false);
   useEffect(() => {
     if (loading || warmed.current || !media.length) return;
@@ -286,6 +301,16 @@ export default function App() {
   const removeUris = (uris) => { setMedia((ms) => ms.filter((m) => !uris.has(m.uri))); setHiddenItems((hs) => hs.filter((m) => !uris.has(m.uri))); };
   const runJobs = (jobs) => { if (!jobs.length) return; pending.current += jobs.length; (async () => { for (const fn of jobs) { try { await fn(); } catch {} finally { pending.current = Math.max(0, pending.current - 1); } } })(); };
 
+  // выполнение пачки с прогрессом (для больших операций)
+  const runProgress = async (jobs, label) => {
+    if (!jobs.length) return;
+    const total = jobs.length; const show = total > 5;
+    if (show) setProgress({ done: 0, total, label });
+    pending.current += total;
+    for (let i = 0; i < total; i++) { try { await jobs[i](); } catch {} pending.current = Math.max(0, pending.current - 1); if (show) setProgress({ done: i + 1, total, label }); }
+    setProgress(null);
+  };
+
   const moveToTrash = (items) => {
     const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set(); const jobs = [];
     for (const it of items) {
@@ -297,26 +322,32 @@ export default function App() {
     }
     saveMap(TRASHMETA, meta);
     removeUris(uris); setTrashItems((ts) => [...newT, ...ts]); // мгновенно
-    runJobs(jobs);                                            // файлы — в фоне
+    runProgress(jobs, "Удаление");
   };
-  const restoreTrash = (items) => {
-    const meta = loadMap(TRASHMETA); const back = []; const done = new Set(); const jobs = [];
-    for (const it of items) {
-      const k = baseName(it.uri); const m = meta[k]; if (!m) continue;
-      const pp = parentOf(m.orig);
-      back.push({ uri: m.orig, name: m.name, mtime: m.mtime || Date.now(), size: it.size, video: isVidName(m.name), bucketPath: pp, bucketName: baseName(pp) });
-      done.add(it.uri); jobs.push(() => Apps.move({ from: it.uri, to: m.orig })); delete meta[k];
+  // восстановление: ждём move (обрабатываем коллизии имён по факту)
+  const restoreTrash = async (items) => {
+    const meta = loadMap(TRASHMETA);
+    const tasks = items.map((it) => ({ it, m: meta[baseName(it.uri)] })).filter((x) => x.m);
+    const rm = new Set(tasks.map((x) => x.it.uri));
+    setTrashItems((ts) => ts.filter((t) => !rm.has(t.uri)));
+    const total = tasks.length; const show = total > 5; if (show) setProgress({ done: 0, total, label: "Восстановление" });
+    pending.current += total; const back = [];
+    for (let i = 0; i < total; i++) {
+      const { it, m } = tasks[i];
+      try { const r = await Apps.move({ from: it.uri, to: m.orig }); const uri = (r && r.uri) || m.orig; const pp = parentOf(uri); back.push({ uri, name: baseName(uri), mtime: m.mtime || Date.now(), size: it.size, video: isVidName(uri), bucketPath: pp, bucketName: baseName(pp) }); } catch {}
+      delete meta[baseName(it.uri)]; pending.current = Math.max(0, pending.current - 1);
+      if (show) setProgress({ done: i + 1, total, label: "Восстановление" });
     }
     saveMap(TRASHMETA, meta);
-    setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); setMedia((ms) => dedup([...back, ...ms])); // мгновенно
-    runJobs(jobs);
+    if (back.length) setMedia((ms) => dedup([...back, ...ms]));
+    setProgress(null);
   };
   const deleteForever = (items) => {
     const meta = loadMap(TRASHMETA); const done = new Set(); const jobs = [];
     for (const it of items) { delete meta[baseName(it.uri)]; done.add(it.uri); jobs.push(() => Apps.delete({ uri: it.uri })); }
     saveMap(TRASHMETA, meta);
     setTrashItems((ts) => ts.filter((t) => !done.has(t.uri))); // мгновенно
-    runJobs(jobs);
+    runProgress(jobs, "Удаление");
   };
 
   /* ---- подтверждение (инлайн, рядом с кнопкой удалить) + действия ---- */
@@ -373,6 +404,7 @@ export default function App() {
     if (s === "trash") loadTrash();
     exitSel(); setAlbumKey(null); setSection(s); setGridMenu(false); setConfirm(null); setInfo(null);
   };
+  const selBytes = () => { if (selMode === "album") { let n = 0; for (const a of albumPool) if (sel.has(a.key)) for (const it of a.items) n += it.size || 0; return n; } return selPhotos().reduce((n, m) => n + (m.size || 0), 0); };
   const selectAllCur = () => { if (selMode === "album") setSel(new Set(albumPool.map((a) => a.key))); else setSel(new Set(photoPool().map((m) => m.uri))); };
   const emptyTrashAsk = (el) => { if (!trashItems.length) return; ask("Очистить корзину?", () => { deleteForever(trashItems); }, el); };
   const enterHidden = () => {
@@ -404,7 +436,7 @@ export default function App() {
         <div style={{ height: 50, margin: "8px 8px 6px", borderRadius: 25, background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid " + LINE, display: "flex", alignItems: "center", gap: 6, padding: "0 8px 0 16px", boxShadow: "0 4px 16px -6px rgba(0,0,0,.4)" }}>
           {selMode ? (
             <>
-              <span style={{ flex: 1, fontSize: 16, fontWeight: 600 }}>{sel.size}</span>
+              <span style={{ flex: 1, fontSize: 16, fontWeight: 600 }}>{sel.size}{sel.size ? " · " + fmtSize(selBytes()) : ""}</span>
               <button onClick={exitSel} style={btnIcon}><Svg d={I.x} size={22} /></button>
             </>
           ) : (
@@ -445,6 +477,21 @@ export default function App() {
           <PhotoGrid items={trashItems} mode={gridMode} {...{ selMode, sel, toggleSel, startSel, openViewer, trash: true }} empty="Корзина пуста" />
         )}
       </div>
+
+      {/* быстрый скроллбар с датой */}
+      {curItems.length > 40 && (scrub.show || scrub.drag) && (
+        <div style={{ position: "absolute", top: "calc(env(safe-area-inset-top) + 70px)", bottom: "calc(env(safe-area-inset-bottom) + 90px)", right: 4, width: 44, zIndex: 15, pointerEvents: "none" }}>
+          <div onTouchStart={(e) => { setScrub((sc) => ({ ...sc, drag: true })); scrubTo(e.touches[0].clientY); }} onTouchMove={(e) => { e.preventDefault(); scrubTo(e.touches[0].clientY); }} onTouchEnd={() => setScrub((sc) => ({ ...sc, drag: false }))}
+            style={{ position: "absolute", top: (scrub.frac * 100) + "%", right: 0, transform: "translateY(-50%)", width: 44, height: 44, pointerEvents: "auto", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+            <div style={{ width: 6, height: 36, borderRadius: 3, background: ACC, boxShadow: "0 1px 4px rgba(0,0,0,.4)" }} />
+          </div>
+          {scrub.drag && (
+            <div style={{ position: "absolute", top: (scrub.frac * 100) + "%", right: 22, transform: "translateY(-50%)", background: BAR, border: "1px solid " + LINE, borderRadius: 10, padding: "6px 12px", color: TXT, fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", boxShadow: "0 4px 16px rgba(0,0,0,.4)" }}>
+              {monthLabel(curItems[Math.min(curItems.length - 1, Math.floor(scrub.frac * curItems.length))].mtime)}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ===== нижняя зона (оверлей поверх фото) ===== */}
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 20, paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)", paddingTop: 6, display: "flex", alignItems: "center", justifyContent: "center", transform: (hideTop && !selMode) ? "translateY(130%)" : "translateY(0)", transition: "transform .25s ease" }}>
@@ -540,6 +587,13 @@ export default function App() {
         );
       })()}
 
+      {progress && (
+        <div style={{ position: "fixed", left: "50%", bottom: "calc(env(safe-area-inset-bottom) + 92px)", transform: "translateX(-50%)", zIndex: 1700, background: BAR, border: "1px solid " + LINE, borderRadius: 12, padding: "10px 16px", minWidth: 210, boxShadow: "0 8px 24px rgba(0,0,0,.5)" }}>
+          <div style={{ color: TXT, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{progress.label} {progress.done}/{progress.total}</div>
+          <div style={{ height: 4, background: ROW2, borderRadius: 2, overflow: "hidden" }}><div style={{ height: "100%", width: (progress.done / progress.total * 100) + "%", background: ACC, transition: "width .15s" }} /></div>
+        </div>
+      )}
+
       {/* ===== Свойства ===== */}
       {info && (
         <div style={{ position: "fixed", inset: 0, zIndex: 1650, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setInfo(null)}>
@@ -585,6 +639,33 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
   );
 }
 
+const estH = (g, classic, cw3, cw4) => {
+  const hdr = 46;
+  if (classic) { const rows = Math.ceil(g.entries.length / 4); return hdr + rows * cw4 + (rows - 1) * 3; }
+  let sum = 0; for (const e of g.entries) { const ar = (e.m.w && e.m.h) ? clampAR(e.m.w / e.m.h) : 1; sum += cw3 / ar + 3; }
+  return hdr + Math.ceil(sum / 3);
+};
+// секция месяца с виртуализацией: далеко от экрана — только заголовок + распорка нужной высоты
+function MonthSection({ g, classic, pass, cw3, cw4 }) {
+  const ref = useRef(null);
+  const [vis, setVis] = useState(false);
+  const [h, setH] = useState(() => estH(g, classic, cw3, cw4));
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) setVis(true); else { if (ref.current && ref.current.offsetHeight) setH(ref.current.offsetHeight); setVis(false); } }, { rootMargin: "1200px 0px" });
+    io.observe(el); return () => io.disconnect();
+  }, []);
+  return (
+    <div ref={ref} style={{ minHeight: vis ? undefined : h }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: "var(--txt)", padding: "16px 6px 10px" }}>{g.label}</div>
+      {vis && (classic ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>{g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} square {...pass} />)}</div>
+      ) : (
+        <div style={{ columnCount: 3, columnGap: 3 }}>{g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} {...pass} />)}</div>
+      ))}
+    </div>
+  );
+}
 function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty, mode }) {
   const hold = useRef({ t: null, fired: false });
   if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
@@ -597,22 +678,11 @@ function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash
   let cur = null;
   for (const e of indexed) { const d = new Date(e.m.mtime); const key = d.getFullYear() + "-" + d.getMonth(); if (!cur || cur.key !== key) { cur = { key, label: monthLabel(e.m.mtime), entries: [] }; groups.push(cur); } cur.entries.push(e); }
 
+  const W = (typeof window !== "undefined" ? window.innerWidth : 400) - 8;
+  const cw3 = (W - 2 * 3) / 3, cw4 = (W - 3 * 3) / 4;
   const body = (
     <div style={{ padding: "0 4px 4px" }}>
-      {groups.map((g) => (
-        <div key={g.key}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--txt)", padding: "16px 6px 10px" }}>{g.label}</div>
-          {classic ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
-              {g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} square {...pass} />)}
-            </div>
-          ) : (
-            <div style={{ columnCount: 3, columnGap: 3 }}>
-              {g.entries.map((e) => <PhotoCell key={e.m.uri} e={e} {...pass} />)}
-            </div>
-          )}
-        </div>
-      ))}
+      {groups.map((g) => <MonthSection key={g.key} g={g} classic={classic} pass={pass} cw3={cw3} cw4={cw4} />)}
     </div>
   );
   return <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>{body}</div>;
@@ -659,10 +729,10 @@ function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hi
 /* ===== нижний тулбар выделения ===== */
 function Toolbar({ items, disabled }) {
   return (
-    <div style={{ display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid var(--line)", borderRadius: 30, padding: "6px 8px", gap: 4, boxShadow: "0 6px 22px rgba(0,0,0,.4)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
+    <div style={{ display: "flex", background: "var(--barA)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid var(--line)", borderRadius: 30, padding: 5, gap: 2, boxShadow: "0 6px 22px rgba(0,0,0,.4)", opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}>
       {items.map(([ic, lbl, fn, red], i) => (
-        <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: red ? "var(--red)" : "var(--txt)", minWidth: 84, padding: "2px 10px" }}>
-          <Svg d={ic} size={22} /><span style={{ fontSize: 11 }}>{lbl}</span>
+        <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, color: red ? "var(--red)" : "var(--txt)", minWidth: 64, padding: "7px 12px" }}>
+          <Svg d={ic} size={21} /><span style={{ fontSize: 10.5 }}>{lbl}</span>
         </span>
       ))}
     </div>
