@@ -67,6 +67,7 @@ const tPump = () => { while (tActive < T_MAX && tq.length) { const j = tq.shift(
 const tEnqueue = (j) => { tq.push(j); tPump(); };
 const thumbCache = new Map();
 const thumbAR = new Map();
+function Empty({ icon, text }) { return <div style={{ minHeight: "62vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--sub)", gap: 12 }}><Svg d={icon} size={54} /><span style={{ fontSize: 14 }}>{text}</span></div>; }
 const convFile = (p) => { try { return Capacitor.convertFileSrc(p && p.startsWith("file://") ? p : "file://" + p); } catch { return p; } };
 const cacheThumb = (k, v) => { thumbCache.set(k, v); if (thumbCache.size > 500) { const first = thumbCache.keys().next().value; thumbCache.delete(first); } };
 const clampAR = (r) => { const n = Number(r); return (isFinite(n) && n > 0) ? Math.min(Math.max(n, 0.45), 2.4) : 1; };
@@ -141,7 +142,107 @@ function brCells(seq, cols) {
   return cells;
 }
 
-export default function App() {
+export default function Editor({ item, onClose, onSaved }) {
+  const [rot, setRot] = useState(0);
+  const [br, setBr] = useState(1), [co, setCo] = useState(1), [sa, setSa] = useState(1);
+  const [tool, setTool] = useState("adjust");
+  const [saving, setSaving] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [cropR, setCropR] = useState(null);
+  const baseRef = useRef(null), viewRef = useRef(null), scaleRef = useRef(1);
+  const strokes = useRef([]), draw = useRef(null), cdrag = useRef(null);
+  const [penC, setPenC] = useState("#FF3B30"), [penW, setPenW] = useState(6);
+  const filter = "brightness(" + br + ") contrast(" + co + ") saturate(" + sa + ")";
+
+  useEffect(() => {
+    const im = new Image();
+    im.onload = () => {
+      const maxS = 1600, w = im.naturalWidth, h = im.naturalHeight, sc = Math.min(1, maxS / Math.max(w, h));
+      const bw = Math.round(w * sc), bh = Math.round(h * sc), rotated = rot % 180 !== 0;
+      const c = document.createElement("canvas"); c.width = rotated ? bh : bw; c.height = rotated ? bw : bh;
+      const ctx = c.getContext("2d"); ctx.translate(c.width / 2, c.height / 2); ctx.rotate(rot * Math.PI / 180); ctx.drawImage(im, -bw / 2, -bh / 2, bw, bh);
+      baseRef.current = c; setCropR(null); strokes.current = strokes.current; setReady(true); setTick((t) => t + 1);
+    };
+    im.onerror = () => onClose();
+    im.src = convFile(item.uri);
+  }, [item.uri, rot]);
+
+  useEffect(() => {
+    const base = baseRef.current, v = viewRef.current; if (!base || !v || !v.parentElement) return;
+    const wrap = v.parentElement, maxW = wrap.clientWidth, maxH = wrap.clientHeight;
+    const sc = Math.min(maxW / base.width, maxH / base.height), vw = Math.round(base.width * sc), vh = Math.round(base.height * sc);
+    v.width = vw; v.height = vh; v.style.width = vw + "px"; v.style.height = vh + "px"; scaleRef.current = base.width / vw;
+    const ctx = v.getContext("2d"); ctx.clearRect(0, 0, vw, vh); ctx.filter = filter; ctx.drawImage(base, 0, 0, vw, vh); ctx.filter = "none";
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const st of strokes.current) { ctx.strokeStyle = st.c; ctx.lineWidth = st.w; ctx.beginPath(); st.p.forEach((pt, i) => i ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y)); ctx.stroke(); }
+  }, [ready, tick, br, co, sa]);
+
+  const pos = (e) => { const r = viewRef.current.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
+  const down = (e) => {
+    if (tool === "draw") { draw.current = { c: penC, w: penW, p: [pos(e)] }; strokes.current.push(draw.current); setTick((t) => t + 1); }
+    else if (tool === "crop") { const p = pos(e); cdrag.current = p; setCropR({ x: p.x, y: p.y, w: 0, h: 0 }); }
+  };
+  const move = (e) => {
+    if (tool === "draw" && draw.current) { e.preventDefault(); draw.current.p.push(pos(e)); setTick((t) => t + 1); }
+    else if (tool === "crop" && cdrag.current) { e.preventDefault(); const p = pos(e), s = cdrag.current; setCropR({ x: Math.min(s.x, p.x), y: Math.min(s.y, p.y), w: Math.abs(p.x - s.x), h: Math.abs(p.y - s.y) }); }
+  };
+  const up = () => { draw.current = null; cdrag.current = null; };
+
+  const save = async () => {
+    if (saving) return; setSaving(true);
+    const base = baseRef.current, cr = cropR && cropR.w > 8 && cropR.h > 8 ? cropR : null, sc = scaleRef.current;
+    const cx = cr ? Math.round(cr.x * sc) : 0, cy = cr ? Math.round(cr.y * sc) : 0, cw = cr ? Math.round(cr.w * sc) : base.width, ch = cr ? Math.round(cr.h * sc) : base.height;
+    const out = document.createElement("canvas"); out.width = cw; out.height = ch; const ctx = out.getContext("2d");
+    ctx.filter = filter; ctx.drawImage(base, cx, cy, cw, ch, 0, 0, cw, ch); ctx.filter = "none";
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const st of strokes.current) { ctx.strokeStyle = st.c; ctx.lineWidth = st.w * sc; ctx.beginPath(); st.p.forEach((pt, i) => { const x = pt.x * sc - cx, y = pt.y * sc - cy; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); }
+    const b64 = out.toDataURL("image/jpeg", 0.92).split(",")[1];
+    const path = item.uri.replace("file://", ""), dir = path.substring(0, path.lastIndexOf("/")), nm = (item.name || "IMG").replace(/\.[^.]+$/, "") + "_edit.jpg";
+    try { const r = await Apps.writeFile({ path: dir + "/" + nm, data: b64 }); onSaved(r && r.uri); } catch (e) { setSaving(false); }
+  };
+
+  const sld = (label, val, set, min, max) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
+      <span style={{ width: 96, color: "#ccc", fontSize: 13 }}>{label}</span>
+      <input type="range" min={min} max={max} step="0.01" value={val} onChange={(e) => set(parseFloat(e.target.value))} style={{ flex: 1 }} />
+    </div>
+  );
+  const tabBtn = (id, lbl) => <button onClick={() => setTool(id)} style={{ flex: 1, background: tool === id ? "rgba(255,255,255,.15)" : "transparent", border: "none", color: tool === id ? "#fff" : "#aaa", fontSize: 13, fontWeight: 600, padding: "10px 0", borderRadius: 8 }}>{lbl}</button>;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1800, background: "#000", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div style={{ display: "flex", alignItems: "center", padding: "12px 16px" }}>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", display: "flex" }}><Svg d={I.x} size={24} /></button>
+        <span style={{ flex: 1 }} />
+        <button onClick={save} disabled={saving} style={{ background: ACC, border: "none", color: "#fff", borderRadius: 20, padding: "8px 20px", fontSize: 14, fontWeight: 700 }}>{saving ? "…" : "Сохранить"}</button>
+      </div>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 8 }}>
+        <div style={{ position: "relative" }}>
+          <canvas ref={viewRef} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up} style={{ touchAction: "none", display: "block" }} />
+          {tool === "crop" && cropR && cropR.w > 4 && <div style={{ position: "absolute", left: cropR.x, top: cropR.y, width: cropR.w, height: cropR.h, border: "2px solid #fff", boxShadow: "0 0 0 9999px rgba(0,0,0,.45)", pointerEvents: "none" }} />}
+        </div>
+      </div>
+      <div style={{ padding: "8px 16px 4px" }}>
+        {tool === "adjust" && (<>{sld("Яркость", br, setBr, 0.3, 2)}{sld("Контраст", co, setCo, 0.3, 2)}{sld("Насыщенность", sa, setSa, 0, 2)}</>)}
+        {tool === "crop" && <div style={{ color: "#aaa", fontSize: 13, padding: "10px 0", textAlign: "center" }}>Выделите область для обрезки. Пусто — без обрезки.</div>}
+        {tool === "draw" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
+            {["#FF3B30", "#FFCC00", "#34C759", "#0A84FF", "#FFFFFF", "#000000"].map((c) => <span key={c} onClick={() => setPenC(c)} style={{ width: 26, height: 26, borderRadius: 13, background: c, border: penC === c ? "3px solid #fff" : "1px solid #555" }} />)}
+            <input type="range" min="2" max="24" step="1" value={penW} onChange={(e) => setPenW(parseInt(e.target.value))} style={{ flex: 1 }} />
+            <button onClick={() => { strokes.current = []; setTick((t) => t + 1); }} style={{ background: "none", border: "1px solid #555", color: "#ccc", borderRadius: 8, padding: "6px 10px", fontSize: 12 }}>Стереть</button>
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, padding: "4px 12px 8px", alignItems: "center" }}>
+        <button onClick={() => setRot((r) => (r + 90) % 360)} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#fff", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>Повернуть</button>
+        {tabBtn("adjust", "Фильтры")}{tabBtn("crop", "Обрезка")}{tabBtn("draw", "Кисть")}
+      </div>
+    </div>
+  );
+}
+
+function App() {
   const [theme, setTheme] = useState(() => ls.get(THEMEKEY) || "dark");
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
@@ -167,6 +268,7 @@ export default function App() {
   const [gridMode, setGridMode] = useState(() => ls.get(GRIDKEY) || "size");
   const [gridMenu, setGridMenu] = useState(false);
   const [info, setInfo] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [hideTop, setHideTop] = useState(false);
   const [progress, setProgress] = useState(null);
   const [scrub, setScrub] = useState({ frac: 0, show: false, drag: false });
@@ -185,6 +287,7 @@ export default function App() {
   const scrollRef = useRef(null);
   const vTouch = useRef(null);
   const lastScan = useRef(0);
+  const mediaSig = useRef("");
   const pending = useRef(0);
   const hiddenLoaded = useRef(false);
   const dedup = (arr) => { const seen = new Set(); const out = []; for (const x of arr) { if (!seen.has(x.uri)) { seen.add(x.uri); out.push(x); } } return out; };
@@ -209,9 +312,9 @@ export default function App() {
       const r = await Apps.scanMedia({ mode: "visible" });
       if (r.root) setRoot(r.root);
       const items = dedup(r.items || []);
-      setMedia(items);
+      const sig = items.length + ":" + items.reduce((a, m) => a + (m.mtime || 0), 0);
+      if (sig !== mediaSig.current) { mediaSig.current = sig; setMedia(items); persistCache("media", { items, root: r.root || root }); }
       lastScan.current = Date.now();
-      persistCache("media", { items, root: r.root || root });
     } catch {}
     setLoading(false);
   }, [root]);
@@ -249,6 +352,7 @@ export default function App() {
   useEffect(() => { if (!hiddenLoaded.current) return; const id = setTimeout(() => persistCache("hidden", { items: hiddenItems }), 800); return () => clearTimeout(id); }, [hiddenItems]);
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
   useEffect(() => { ls.set(GRIDKEY, gridMode); }, [gridMode]);
+  useEffect(() => { let sub; try { sub = Apps.addListener("mediaChanged", () => scan(true)); } catch {} return () => { if (sub) sub.then((x) => x.remove()).catch(() => {}); }; }, [scan]);
   // прогрев скрытых в фоне ПОСЛЕ загрузки основных (чтобы вход в «Скрытые» был мгновенным)
   useEffect(() => { if (loading || hiddenLoaded.current) return; const id = setTimeout(() => scanHidden(true), 1500); return () => clearTimeout(id); }, [loading, scanHidden]);
   useEffect(() => { if (!album || !album.items.length) return; const uris = [...new Set([...album.items.map((m) => m.uri), ...media.map((m) => m.uri)])]; const id = setTimeout(() => Apps.warmThumbs({ uris }).catch(() => {}), 100); return () => clearTimeout(id); }, [albumKey]);
@@ -379,7 +483,8 @@ export default function App() {
   };
 
   /* ---- вьювер ---- */
-  const openViewer = (items, idx, trash) => { setGridMenu(false); setConfirm(null); setViewer({ items, idx, trash: !!trash }); setBar(false); setDragX(0); };
+  const vFrom = useRef(null);
+  const openViewer = (items, idx, trash, rect) => { vFrom.current = rect || null; setGridMenu(false); setConfirm(null); setViewer({ items, idx, trash: !!trash }); setBar(false); setDragX(0); };
   const viewerGo = (d) => setViewer((v) => { if (!v) return v; const ni = v.idx + d; if (ni < 0 || ni >= v.items.length) return v; return { ...v, idx: ni }; });
   const vCur = viewer && viewer.items[viewer.idx];
   const removeFromViewer = () => setViewer((v) => { const items = v.items.filter((_, i) => i !== v.idx); if (!items.length) return null; return { ...v, items, idx: Math.min(v.idx, items.length - 1) }; });
@@ -390,6 +495,16 @@ export default function App() {
   const stageRef = useRef(null), vbgRef = useRef(null);
   const gz = useRef({ scale: 1, tx: 0, ty: 0, dragX: 0, dragY: 0, mode: "none", pts: new Map(), lastTap: 0, sx: 0, sy: 0, st0: 0, bTx: 0, bTy: 0, sScale: 1, sDist: 0, sMidX: 0, sMidY: 0 });
   useEffect(() => { const g = gz.current; g.scale = 1; g.tx = 0; g.ty = 0; g.dragX = 0; g.dragY = 0; g.mode = "none"; g.pts.clear(); if (stageRef.current) { stageRef.current.style.transition = "none"; stageRef.current.style.transform = ""; } if (vbgRef.current) vbgRef.current.style.opacity = "1"; }, [vCur && vCur.uri]);
+  useEffect(() => {
+    if (!viewer || !vFrom.current) return;
+    const el = vbgRef.current; if (!el) { vFrom.current = null; return; }
+    const r = vFrom.current, cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const s = Math.max(r.width / window.innerWidth, r.height / window.innerHeight);
+    el.style.transformOrigin = cx + "px " + cy + "px";
+    el.style.transition = "none"; el.style.transform = "scale(" + s + ")"; el.style.opacity = "0";
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.style.transition = "transform .26s ease, opacity .22s ease"; el.style.transform = "none"; el.style.opacity = "1"; }));
+    vFrom.current = null;
+  }, [viewer]);
   const vApply = (anim) => { const g = gz.current, st = stageRef.current; if (st) { st.style.transition = anim ? "transform .22s ease" : "none"; st.style.transform = "translate(" + (g.tx + g.dragX) + "px," + (g.ty + g.dragY) + "px) scale(" + g.scale + ")"; } if (vbgRef.current) vbgRef.current.style.opacity = String(Math.max(0, 1 - Math.abs(g.dragY) / 600)); };
   const vDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const vClampPan = () => { const g = gz.current, w = window.innerWidth, h = window.innerHeight, mx = (g.scale - 1) * w / 2, my = (g.scale - 1) * h / 2; g.tx = Math.max(-mx, Math.min(mx, g.tx)); g.ty = Math.max(-my, Math.min(my, g.ty)); };
@@ -453,9 +568,11 @@ export default function App() {
       </div>
 
       {!allFiles && (
-        <div style={{ position: "absolute", left: 8, right: 8, top: "calc(env(safe-area-inset-top) + 64px)", zIndex: 19, background: BAR, border: "1px solid " + LINE, borderRadius: 12, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ flex: 1, fontSize: 13, color: TXT }}>Нужен доступ ко всем файлам, чтобы видеть фото</span>
-          <button onClick={() => Apps.requestAllFiles().catch(() => {})} style={{ background: ACC, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600 }}>Дать доступ</button>
+        <div style={{ position: "absolute", inset: 0, zIndex: 40, background: BG, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
+          <span style={{ display: "flex", color: ACC, marginBottom: 20 }}><Svg d={I.img} size={72} /></span>
+          <div style={{ color: TXT, fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Доступ к фото</div>
+          <div style={{ color: SUB, fontSize: 14, lineHeight: 1.5, maxWidth: 300, marginBottom: 24 }}>Чтобы показывать ваши фото и видео из всех папок, приложению нужен доступ ко всем файлам.</div>
+          <button onClick={() => Apps.requestAllFiles().catch(() => {})} style={{ background: ACC, color: "#fff", border: "none", borderRadius: 12, padding: "13px 32px", fontSize: 15, fontWeight: 700 }}>Разрешить доступ</button>
         </div>
       )}
 
@@ -550,7 +667,7 @@ export default function App() {
                 ? [[I.restore, "Восстановить", viewerRestoreOne, false], [I.info, "Свойства", () => setInfo(vCur), false], [I.x, "Закрыть", () => setViewer(null), false], [I.trash, "Удалить", viewerDeleteOne, true]]
                 : vCur.video
                 ? [[I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "video/*" }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.x, "Закрыть", () => setViewer(null), false], [I.trash, "Удалить", viewerDeleteOne, true]]
-                : [[I.wall, "Обои", () => Apps.setWallpaper({ uri: vCur.uri }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => Apps.editImage({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.trash, "Удалить", viewerDeleteOne, true]]
+                : [[I.wall, "Обои", () => Apps.setWallpaper({ uri: vCur.uri }).catch(() => {}), false], [I.info, "Свойства", () => setInfo(vCur), false], [I.share, "Поделиться", () => Apps.share({ uri: vCur.uri, mime: "image/*" }).catch(() => {}), false], [I.edit, "Изменить", () => setEditing(vCur), false], [I.trash, "Удалить", viewerDeleteOne, true]]
               ).map(([ic, lbl, fn, red], i) => (
                 <span key={i} onClick={(e) => fn(e)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: red ? "#FF6B6B" : "#fff", minWidth: 50 }}>
                   <Svg d={ic} size={22} /><span style={{ fontSize: 10.5 }}>{lbl}</span>
@@ -611,6 +728,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {editing && <Editor item={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); setViewer(null); scan(true); }} />}
     </div>
   );
 }
@@ -624,7 +743,7 @@ function PhotoCell({ e, items, selMode, sel, toggleSel, startSel, openViewer, tr
   const m = e.m, on = sel.has(m.uri);
   return (
     <div
-      onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, e.i, trash); }}
+      onClick={(ev) => { if (hold.current.fired) { hold.current.fired = false; return; } if (selMode) toggleSel(m.uri); else openViewer(items, e.i, trash, ev.currentTarget.getBoundingClientRect()); }}
       onContextMenu={(ev) => ev.preventDefault()}
       onTouchStart={() => { hold.current.fired = false; hold.current.t = setTimeout(() => { hold.current.fired = true; if (!selMode) startSel("photo", m.uri); }, 450); }}
       onTouchEnd={() => clearTimeout(hold.current.t)}
@@ -668,7 +787,7 @@ function MonthSection({ g, classic, pass, cw3, cw4 }) {
 }
 function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash, empty, mode }) {
   const hold = useRef({ t: null, fired: false });
-  if (!items.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{empty}</div>;
+  if (!items.length) return <Empty icon={trash ? I.trash : I.img} text={empty} />;
   const indexed = items.map((m, i) => ({ m, i }));
   const pass = { items, selMode, sel, toggleSel, startSel, openViewer, trash, hold };
   const classic = mode === "classic";
@@ -691,7 +810,7 @@ function PhotoGrid({ items, selMode, sel, toggleSel, startSel, openViewer, trash
 /* ===== сетка альбомов (привязана к правому нижнему углу) ===== */
 function AlbumsView({ albums, selMode, sel, toggleSel, startSel, setAlbumKey, hidden }) {
   const hold = useRef({ t: null, fired: false });
-  if (!albums.length) return <div style={{ padding: 50, textAlign: "center", color: "var(--sub)", fontSize: 14 }}>{hidden ? "Нет скрытых альбомов" : "Альбомы не найдены"}</div>;
+  if (!albums.length) return <Empty icon={I.albums} text={hidden ? "Нет скрытых альбомов" : "Альбомы не найдены"} />;
   const cells = brCells(albums, 3);
   return (
     <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
