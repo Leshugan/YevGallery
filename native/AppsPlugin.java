@@ -117,6 +117,7 @@ public class AppsPlugin extends Plugin {
                 o.put("bucketPath", p != null ? p.getAbsolutePath() : "");
                 o.put("bucketName", p != null ? p.getName() : "");
                 o.put("thumb", new File(thumbDir(), thumbKey(k) + ".jpg").getAbsolutePath());
+                putMeta(o, k, vid);
                 out.put(o);
             }
         }
@@ -140,6 +141,7 @@ public class AppsPlugin extends Plugin {
                 o.put("mtime", k.lastModified());
                 o.put("video", isVid(k.getName()));
                 o.put("thumb", new File(thumbDir(), thumbKey(k) + ".jpg").getAbsolutePath());
+                putMeta(o, k, isVid(k.getName()));
                 arr.put(o);
             }
             JSObject ret = new JSObject(); ret.put("files", arr); call.resolve(ret);
@@ -208,23 +210,24 @@ public class AppsPlugin extends Plugin {
     }
 
     // фоновый прогрев превью (чтобы альбомы открывались мгновенно)
-    private Thread warmThread;
+    private java.util.concurrent.ExecutorService warmPool;
     @PluginMethod
     public void warmThumbs(PluginCall call) {
         JSArray a = call.getArray("uris");
         final java.util.List<String> uris = new java.util.ArrayList<>();
         if (a != null) { try { for (Object o : a.toList()) uris.add(String.valueOf(o)); } catch (Exception ignored) {} }
         call.resolve();
-        if (warmThread != null && warmThread.isAlive()) warmThread.interrupt();
-        warmThread = new Thread(() -> {
-            for (String u : uris) {
+        if (warmPool != null) { warmPool.shutdownNow(); }
+        int cores = Runtime.getRuntime().availableProcessors();
+        int n = Math.max(1, Math.min(4, cores - 2));
+        warmPool = java.util.concurrent.Executors.newFixedThreadPool(n);
+        for (final String u : uris) {
+            warmPool.execute(() -> {
                 if (Thread.currentThread().isInterrupted()) return;
                 try { ensureThumb(toFile(u)); } catch (Throwable ignored) {}
-                try { Thread.sleep(3); } catch (InterruptedException e) { return; }
-            }
-        });
-        warmThread.setPriority(Thread.MIN_PRIORITY);
-        warmThread.start();
+            });
+        }
+        warmPool.shutdown();
     }
 
     // ===== Удалить (насовсем) =====
@@ -239,6 +242,48 @@ public class AppsPlugin extends Plugin {
 
     // ===== Переместить (в корзину / восстановить). Создаёт целевые папки. =====
     @PluginMethod
+    private File uniqueName(File f) {
+        String n = f.getName(); int dot = n.lastIndexOf('.');
+        String base = dot > 0 ? n.substring(0, dot) : n, ext = dot > 0 ? n.substring(dot) : "";
+        for (int i = 1; i < 9999; i++) { File c = new File(f.getParentFile(), base + " (" + i + ")" + ext); if (!c.exists()) return c; }
+        return f;
+    }
+    private int exifDeg(String path) {
+        try {
+            android.media.ExifInterface ex = new android.media.ExifInterface(path);
+            int o = ex.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1);
+            if (o == 6) return 90; if (o == 3) return 180; if (o == 8) return 270;
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+    // размеры (с учётом поворота) и длительность видео — чтобы мозаика не прыгала и показывать длительность
+    private void putMeta(JSObject o, File k, boolean vid) {
+        try {
+            if (vid) {
+                MediaMetadataRetriever r = new MediaMetadataRetriever();
+                try {
+                    r.setDataSource(k.getAbsolutePath());
+                    int w = pInt(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+                    int h = pInt(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+                    int rot = pInt(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+                    long dur = pLong(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
+                    if (rot == 90 || rot == 270) { int t = w; w = h; h = t; }
+                    if (w > 0 && h > 0) { o.put("w", w); o.put("h", h); }
+                    if (dur > 0) o.put("dur", dur);
+                } finally { try { r.release(); } catch (Throwable ignored) {} }
+            } else {
+                android.graphics.BitmapFactory.Options bo = new android.graphics.BitmapFactory.Options();
+                bo.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(k.getAbsolutePath(), bo);
+                int w = bo.outWidth, h = bo.outHeight, deg = exifDeg(k.getAbsolutePath());
+                if (deg == 90 || deg == 270) { int t = w; w = h; h = t; }
+                if (w > 0 && h > 0) { o.put("w", w); o.put("h", h); }
+            }
+        } catch (Throwable ignored) {}
+    }
+    private int pInt(String s) { try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return 0; } }
+    private long pLong(String s) { try { return Long.parseLong(s.trim()); } catch (Throwable t) { return 0; } }
+
     public void move(PluginCall call) {
         String from = call.getString("from");
         String to = call.getString("to");
@@ -248,6 +293,7 @@ public class AppsPlugin extends Plugin {
             File dst = toFile(to);
             File parent = dst.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
+            if (dst.exists()) dst = uniqueName(dst);
             boolean ok = src.renameTo(dst);
             if (!ok) {                                  // разные тома — копируем + удаляем
                 FileInputStream in = new FileInputStream(src);
