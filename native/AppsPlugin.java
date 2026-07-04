@@ -327,6 +327,10 @@ public class AppsPlugin extends Plugin {
     private int pInt(String s) { try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return 0; } }
     private long pLong(String s) { try { return Long.parseLong(s.trim()); } catch (Throwable t) { return 0; } }
 
+    private void deleteViaMediaStore(File f) {
+        try { getContext().getContentResolver().delete(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns.DATA + "=?", new String[]{ f.getAbsolutePath() }); } catch (Throwable ignored) {}
+        try { getContext().sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f))); } catch (Throwable ignored) {}
+    }
     public void move(PluginCall call) {
         String from = call.getString("from");
         String to = call.getString("to");
@@ -338,13 +342,14 @@ public class AppsPlugin extends Plugin {
             if (parent != null && !parent.exists()) parent.mkdirs();
             if (dst.exists()) dst = uniqueName(dst);
             boolean ok = src.renameTo(dst);
-            if (!ok) {                                  // разные тома — копируем + удаляем
+            if (!ok) {                                  // копируем и удаляем оригинал (File.delete/renameTo часто не проходят для медиа)
                 FileInputStream in = new FileInputStream(src);
                 FileOutputStream o = new FileOutputStream(dst);
                 byte[] buf = new byte[65536]; int r;
                 while ((r = in.read(buf)) > 0) o.write(buf, 0, r);
                 in.close(); o.close();
-                ok = src.delete();
+                if (!src.delete()) deleteViaMediaStore(src);
+                ok = dst.exists();                      // успех = файл реально в корзине
             }
             JSObject ret = new JSObject(); ret.put("ok", ok); ret.put("uri", "file://" + dst.getAbsolutePath()); call.resolve(ret);
         } catch (Exception e) { call.reject(e.getMessage()); }
