@@ -360,8 +360,7 @@ public class AppsPlugin extends Plugin {
                 byte[] buf = new byte[65536]; int r;
                 while ((r = in.read(buf)) > 0) o.write(buf, 0, r);
                 in.close(); o.close();
-                if (!src.delete()) deleteViaMediaStore(src);
-                ok = dst.exists();                      // успех = файл реально в корзине
+                ok = src.delete();
             }
             JSObject ret = new JSObject(); ret.put("ok", ok); ret.put("uri", "file://" + dst.getAbsolutePath()); call.resolve(ret);
         } catch (Exception e) { call.reject(e.getMessage()); }
