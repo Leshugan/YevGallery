@@ -416,18 +416,26 @@ export default function App() {
     setProgress(null);
   };
 
-  const moveToTrash = (items) => {
-    const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set(); const jobs = [];
-    for (const it of items) {
+  const moveToTrash = async (items) => {
+    const uris = new Set(items.map((i) => i.uri));
+    removeUris(uris); // мгновенно скрываем
+    const meta = loadMap(TRASHMETA); const newT = []; const failed = [];
+    const total = items.length, show = total > 5; if (show) setProgress({ done: 0, total, label: "Удаление" });
+    pending.current += total;
+    for (let i = 0; i < total; i++) {
+      const it = items[i];
       const tname = Date.now() + "_" + Math.random().toString(36).slice(2, 7) + "__" + baseName(it.uri);
       const to = "file://" + TRASH + "/" + tname;
-      meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime };
-      newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video });
-      uris.add(it.uri); jobs.push(() => Apps.move({ from: it.uri, to }));
+      let ok = false; try { const r = await Apps.move({ from: it.uri, to }); ok = !r || r.ok !== false; } catch {}
+      if (ok) { meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); }
+      else failed.push(it);
+      pending.current = Math.max(0, pending.current - 1);
+      if (show) setProgress({ done: i + 1, total, label: "Удаление" });
     }
     saveMap(TRASHMETA, meta);
-    removeUris(uris); setTrashItems((ts) => [...newT, ...ts]); // мгновенно
-    runProgress(jobs, "Удаление");
+    if (newT.length) setTrashItems((ts) => [...newT, ...ts]);
+    if (failed.length) setMedia((ms) => dedup([...failed, ...ms])); // не потеряли: возвращаем в ленту
+    setProgress(null);
   };
   // восстановление: ждём move (обрабатываем коллизии имён по факту)
   const restoreTrash = async (items) => {
