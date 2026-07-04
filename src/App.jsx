@@ -142,7 +142,7 @@ function brCells(seq, cols) {
   return cells;
 }
 
-export default function Editor({ item, onClose, onSaved }) {
+function Editor({ item, onClose, onSaved }) {
   const [rot, setRot] = useState(0);
   const [br, setBr] = useState(1), [co, setCo] = useState(1), [sa, setSa] = useState(1);
   const [tool, setTool] = useState("adjust");
@@ -242,7 +242,7 @@ export default function Editor({ item, onClose, onSaved }) {
   );
 }
 
-function App() {
+export default function App() {
   const [theme, setTheme] = useState(() => ls.get(THEMEKEY) || "dark");
   const T = THEMES[theme] || THEMES.dark;
   const [allFiles, setAllFiles] = useState(true);
