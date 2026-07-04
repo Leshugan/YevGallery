@@ -355,7 +355,6 @@ export default function App() {
   useEffect(() => { Apps.setBars({ color: T["--bg"], light: theme === "light" }).catch(() => {}); ls.set(THEMEKEY, theme); }, [theme]);
   useEffect(() => { ls.set(GRIDKEY, gridMode); }, [gridMode]);
   useEffect(() => { Apps.sysPaths().then((r) => { if (r && r.trash) setTrashDir(r.trash); }).catch(() => {}); }, []);
-  useEffect(() => { let sub; try { sub = Apps.addListener("mediaChanged", () => scan(true)); } catch {} return () => { if (sub) sub.then((x) => x.remove()).catch(() => {}); }; }, [scan]);
   // прогрев скрытых в фоне ПОСЛЕ загрузки основных (чтобы вход в «Скрытые» был мгновенным)
   useEffect(() => { if (loading || hiddenLoaded.current) return; const id = setTimeout(() => scanHidden(true), 1500); return () => clearTimeout(id); }, [loading, scanHidden]);
   useEffect(() => { if (!album || !album.items.length) return; const uris = [...new Set([...album.items.map((m) => m.uri), ...media.map((m) => m.uri)])]; const id = setTimeout(() => Apps.warmThumbs({ uris }).catch(() => {}), 100); return () => clearTimeout(id); }, [albumKey]);
@@ -418,26 +417,18 @@ export default function App() {
     setProgress(null);
   };
 
-  const moveToTrash = async (items) => {
-    const uris = new Set(items.map((i) => i.uri));
-    removeUris(uris); // мгновенно скрываем
-    const meta = loadMap(TRASHMETA); const newT = []; const failed = [];
-    const total = items.length, show = total > 5; if (show) setProgress({ done: 0, total, label: "Удаление" });
-    pending.current += total;
-    for (let i = 0; i < total; i++) {
-      const it = items[i];
+  const moveToTrash = (items) => {
+    const meta = loadMap(TRASHMETA); const newT = []; const uris = new Set();
+    for (const it of items) {
       const tname = Date.now() + "_" + Math.random().toString(36).slice(2, 7) + "__" + baseName(it.uri);
       const to = "file://" + TRASH + "/" + tname;
-      let ok = false; try { const r = await Apps.move({ from: it.uri, to }); ok = !r || r.ok !== false; } catch {}
-      if (ok) { meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); }
-      else failed.push(it);
-      pending.current = Math.max(0, pending.current - 1);
-      if (show) setProgress({ done: i + 1, total, label: "Удаление" });
+      meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime };
+      newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video });
+      uris.add(it.uri);
+      Apps.move({ from: it.uri, to }).catch(() => {});
     }
     saveMap(TRASHMETA, meta);
-    if (newT.length) setTrashItems((ts) => [...newT, ...ts]);
-    if (failed.length) setMedia((ms) => dedup([...failed, ...ms])); // не потеряли: возвращаем в ленту
-    setProgress(null);
+    removeUris(uris); setTrashItems((ts) => [...newT, ...ts]);
   };
   // восстановление: ждём move (обрабатываем коллизии имён по факту)
   const restoreTrash = async (items) => {
