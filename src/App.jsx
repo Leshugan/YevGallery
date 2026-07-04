@@ -272,6 +272,7 @@ export default function App() {
   const [hideTop, setHideTop] = useState(false);
   const [progress, setProgress] = useState(null);
   const [scrub, setScrub] = useState({ frac: 0, show: false, drag: false });
+  useEffect(() => { setHideTop(false); lastY.current = 0; }, [albumKey, section]);
   const scrubHide = useRef(null);
   const lastY = useRef(0);
   const onScroll = (e) => {
