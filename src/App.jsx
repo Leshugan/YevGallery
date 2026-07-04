@@ -428,7 +428,7 @@ export default function App() {
       const to = "file://" + TRASH + "/" + tname;
       let ok = false; try { const r = await Apps.move({ from: it.uri, to }); ok = !r || r.ok !== false; } catch {}
       if (ok) { meta[tname] = { orig: it.uri, name: baseName(it.uri), mtime: it.mtime }; newT.push({ uri: to, name: baseName(it.uri), mtime: it.mtime, video: !!it.video }); }
-      else failed.push(it);
+      else { let del = false; try { const d = await Apps.delete({ uri: it.uri }); del = !d || d.ok !== false; } catch {} if (!del) failed.push(it); }
       pending.current = Math.max(0, pending.current - 1);
       if (show) setProgress({ done: i + 1, total, label: "Удаление" });
     }
