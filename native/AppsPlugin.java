@@ -17,6 +17,11 @@ import android.os.StrictMode;
 import android.os.Environment;
 import android.provider.Settings;
 import android.util.Base64;
+import android.util.Size;
+import android.os.Handler;
+import android.os.Looper;
+import android.database.ContentObserver;
+import android.provider.MediaStore;
 
 import androidx.core.content.FileProvider;
 
@@ -37,6 +42,24 @@ import java.util.ArrayList;
 
 @CapacitorPlugin(name = "Apps")
 public class AppsPlugin extends Plugin {
+
+    private ContentObserver mediaObserver;
+    @Override
+    public void load() {
+        try {
+            Handler h = new Handler(Looper.getMainLooper());
+            mediaObserver = new ContentObserver(h) {
+                private long last = 0;
+                @Override public void onChange(boolean self) {
+                    long now = System.currentTimeMillis();
+                    if (now - last < 1500) return; last = now;   // дебаунс
+                    notifyListeners("mediaChanged", new JSObject());
+                }
+            };
+            getContext().getContentResolver().registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, mediaObserver);
+            getContext().getContentResolver().registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, mediaObserver);
+        } catch (Throwable ignored) {}
+    }
 
     private static final String IMG = "jpg|jpeg|png|webp|gif|bmp|heic|heif";
     private static final String VID = "mp4|mkv|avi|mov|webm|3gp|m4v|ts";
@@ -168,14 +191,19 @@ public class AppsPlugin extends Plugin {
             String name = f.getName().toLowerCase();
             Bitmap b = null;
             if (isImg(name)) {
-                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-                int s = 1; while (o.outWidth / s > 1024 || o.outHeight / s > 1024) s *= 2;
-                android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
-                o2.inSampleSize = s;
-                b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
-                b = applyExif(b, f.getAbsolutePath());
+                if (Build.VERSION.SDK_INT >= 29) {
+                    try { b = ThumbnailUtils.createImageThumbnail(f, new Size(512, 512), null); } catch (Throwable ignored) {}
+                }
+                if (b == null) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+                    int s = 1; while (o.outWidth / s > 1024 || o.outHeight / s > 1024) s *= 2;
+                    android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+                    o2.inSampleSize = s;
+                    b = android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
+                    b = applyExif(b, f.getAbsolutePath());
+                }
             } else if (isVid(name)) {
                 try { b = ThumbnailUtils.createVideoThumbnail(f.getAbsolutePath(), android.provider.MediaStore.Images.Thumbnails.MINI_KIND); } catch (Throwable ignored) {}
                 if (b == null) {
@@ -211,6 +239,21 @@ public class AppsPlugin extends Plugin {
 
     // фоновый прогрев превью (чтобы альбомы открывались мгновенно)
     private java.util.concurrent.ExecutorService warmPool;
+    @PluginMethod
+    public void writeFile(PluginCall call) {
+        String path = call.getString("path");
+        String data = call.getString("data");   // base64 (без префикса)
+        if (path == null || data == null) { call.reject("no path/data"); return; }
+        try {
+            File f = new File(path);
+            if (f.getParentFile() != null && !f.getParentFile().exists()) f.getParentFile().mkdirs();
+            if (f.exists()) f = uniqueName(f);
+            byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            OutputStream o = new FileOutputStream(f); o.write(bytes); o.close();
+            JSObject ret = new JSObject(); ret.put("uri", "file://" + f.getAbsolutePath()); ret.put("path", f.getAbsolutePath()); call.resolve(ret);
+        } catch (Exception e) { call.reject(e.getMessage()); }
+    }
+
     @PluginMethod
     public void warmThumbs(PluginCall call) {
         JSArray a = call.getArray("uris");
