@@ -19,14 +19,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Распаковать архив проекта
+        run: |
+          ARCH=$(ls *.zip 2>/dev/null | head -1)
+          if [ -z "$ARCH" ]; then echo "::error::Не найден архив проекта (*.zip) в корне репозитория"; exit 1; fi
+          echo "Распаковываю $ARCH"
+          unzip -o "$ARCH" -d .
+          echo "----- содержимое -----" && ls -la
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Кэш npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
 
       - uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
+
+      - name: Кэш Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Install dependencies
         run: npm install
@@ -83,7 +104,7 @@ jobs:
         working-directory: android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleRelease \
+          ./gradlew assembleRelease --build-cache \
             -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/uc.jks" \
             -Pandroid.injected.signing.store.password="updatechecker" \
             -Pandroid.injected.signing.key.alias="uc" \
