@@ -60,6 +60,13 @@ jobs:
           rm -rf android            # снести любую закоммиченную/старую платформу — иначе cap add пропустит свежую сборку
           npx cap add android
           npx cap copy android      # принудительно скопировать свежий web-бандл (dist) в ассеты
+          # тюнинг Gradle: параллельность + build cache (быстрее компиляция)
+          {
+            echo "org.gradle.caching=true"
+            echo "org.gradle.parallel=true"
+            echo "org.gradle.configureondemand=true"
+            echo "org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8"
+          } >> android/gradle.properties
 
       - name: Generate app icons
         run: |
