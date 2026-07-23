@@ -1,8 +1,12 @@
 name: Build APK
+run-name: "🔨 Сборка APK YevGallery"
 
 on:
   push:
     branches: [main]
+    paths:                            # собирать только когда меняется сам проект,
+      - 'Project_YevGallery.zip'      # а не README и прочая мелочь в репозитории
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 concurrency:
@@ -19,25 +23,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Распаковать архив проекта
+      - name: Распаковать архив проекта в корень
         run: |
-          ARCH=$(ls *.zip 2>/dev/null | head -1)
-          if [ -z "$ARCH" ]; then echo "::error::Не найден архив проекта (*.zip) в корне репозитория"; exit 1; fi
-          echo "Распаковываю $ARCH"
-          unzip -o "$ARCH" -d .
-          echo "----- содержимое -----" && ls -la
+          set -e
+          if [ ! -f Project_YevGallery.zip ]; then
+            echo "::error::Нет Project_YevGallery.zip в корне репозитория."; exit 1
+          fi
+          unzip -o -q Project_YevGallery.zip -d _extracted
+          if [ -d _extracted/Project_YevGallery ]; then SRC=_extracted/Project_YevGallery; else SRC=_extracted; fi
+          shopt -s dotglob
+          for item in "$SRC"/*; do
+            name=$(basename "$item")
+            [ "$name" = ".github" ] && continue     # workflow из репозитория архивом не перетираем
+            rm -rf "./$name"
+            cp -r "$item" "./$name"
+          done
+          shopt -u dotglob
+          rm -rf _extracted
+          rm -f Project_YevGallery.zip
+          echo "=== корень после распаковки ===" && ls -la
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Кэш npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-
+          cache: "npm"                 # работает благодаря package-lock.json в архиве
 
       - uses: actions/setup-java@v4
         with:
@@ -50,7 +59,7 @@ jobs:
           cache-read-only: false
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci || npm install     # ci — быстрее и детерминированнее; install — запасной путь
 
       - name: Build web
         run: npm run build
@@ -58,6 +67,7 @@ jobs:
       - name: Add Android platform
         run: |
           rm -rf android            # снести любую закоммиченную/старую платформу — иначе cap add пропустит свежую сборку
+          rm -f capacitor.config.ts # в архиве только JSON-конфиг; свежий CLI спотыкается на разборе .ts
           npx cap add android
           npx cap copy android      # принудительно скопировать свежий web-бандл (dist) в ассеты
           # тюнинг Gradle: параллельность + build cache (быстрее компиляция)
@@ -120,7 +130,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Compiled_YevGallery
+          name: YevGallery_Compiled
           path: android/app/build/outputs/apk/release/*.apk
 
   cleanup:
