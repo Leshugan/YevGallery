@@ -77,6 +77,12 @@ jobs:
             echo "org.gradle.configureondemand=true"
             echo "org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8"
           } >> android/gradle.properties
+          # версия APK берётся из package.json: 1.001 -> versionName "1.001", versionCode 1001
+          VER=$(node -p "require('./package.json').version")
+          VCODE=$(node -p "String(Math.round(parseFloat(require('./package.json').version) * 1000))")
+          sed -i "s/versionCode [0-9][0-9]*/versionCode $VCODE/; s/versionName \"[^\"]*\"/versionName \"$VER\"/" android/app/build.gradle
+          echo "версия APK: $VER ($VCODE)"
+          grep -E "versionCode|versionName" android/app/build.gradle
 
       - name: Generate app icons
         run: |
@@ -106,6 +112,15 @@ jobs:
           # singleTask ломает startActivityForResult: вызывающее приложение сразу получает "отменено"
           s = s.replace('android:launchMode="singleTask"', 'android:launchMode="singleTop"')
           FILTERS = """
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" android:mimeType="image/*" />
+                <data android:scheme="content" android:mimeType="video/*" />
+                <data android:scheme="file" android:mimeType="image/*" />
+                <data android:scheme="file" android:mimeType="video/*" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.GET_CONTENT" />
                 <category android:name="android.intent.category.DEFAULT" />
