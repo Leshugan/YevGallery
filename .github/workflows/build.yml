@@ -98,6 +98,43 @@ jobs:
           # старый back-callback, чтобы кнопка/жест «Назад» доходили до приложения
           sed -i 's#<application #<application android:enableOnBackInvokedCallback="false" #' "$MAN"
           # FileProvider — для «обои/поделиться/изменить»
+          # регистрируем приложение как источник выбора медиа (файл-пикер фото/видео)
+          python3 - "$MAN" <<'PYEOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          # singleTask ломает startActivityForResult: вызывающее приложение сразу получает "отменено"
+          s = s.replace('android:launchMode="singleTask"', 'android:launchMode="singleTop"')
+          FILTERS = """
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PICK" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="vnd.android.cursor.dir/image" />
+                <data android:mimeType="vnd.android.cursor.dir/video" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PICK" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="image/*" />
+                <data android:scheme="content" android:mimeType="video/*" />
+                <data android:scheme="content" android:mimeType="vnd.android.cursor.dir/image" />
+                <data android:scheme="content" android:mimeType="vnd.android.cursor.dir/video" />
+            </intent-filter>
+          """
+          if "GET_CONTENT" not in s:
+              s = s.replace("</activity>", FILTERS + "</activity>", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          print("манифест: фильтры пикера добавлены, launchMode =", "singleTop" if "singleTop" in s else "?")
+          PYEOF
           if ! grep -q "appsfp" "$MAN"; then
             sed -i 's#</application>#    <provider android:name="leshugan.yg.AppsFileProvider" android:authorities="${applicationId}.appsfp" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/apps_file_paths" /></provider>\n    </application>#' "$MAN"
           fi
