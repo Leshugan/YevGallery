@@ -147,6 +147,10 @@ jobs:
           """
           if "GET_CONTENT" not in s:
               s = s.replace("</activity>", FILTERS + "</activity>", 1)
+          PROVIDER = """    <provider android:name="leshugan.yg.YevDocumentsProvider" android:authorities="${applicationId}.documents" android:exported="true" android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS"><intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter></provider>
+          """
+          if "YevDocumentsProvider" not in s:
+              s = s.replace("</application>", PROVIDER + "</application>", 1)
           open(p, "w", encoding="utf-8").write(s)
           print("манифест: фильтры пикера добавлены, launchMode =", "singleTop" if "singleTop" in s else "?")
           PYEOF
@@ -163,6 +167,7 @@ jobs:
           cp native/AppsPlugin.java "$PKG/AppsPlugin.java"
           cp native/MainActivity.java "$PKG/MainActivity.java"
           cp native/AppsFileProvider.java "$PKG/AppsFileProvider.java"
+          cp native/YevDocumentsProvider.java "$PKG/YevDocumentsProvider.java"
           cp native/apps_file_paths.xml android/app/src/main/res/xml/apps_file_paths.xml
           echo "native files:" && ls -la "$PKG"
 
