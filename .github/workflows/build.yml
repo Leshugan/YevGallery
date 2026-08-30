@@ -179,11 +179,25 @@ jobs:
             -Pandroid.injected.signing.key.alias="uc" \
             -Pandroid.injected.signing.key.password="updatechecker"
 
+      - name: Переименовать APK по версии
+        id: rename_apk
+        run: |
+          set -e
+          VER=$(node -p "require('./package.json').version" 2>/dev/null || echo "dev")
+          DIR=android/app/build/outputs/apk/release
+          SRC=$(ls "$DIR"/*.apk | head -1)
+          OUT="$DIR/YevGallery_$VER.apk"
+          mv "$SRC" "$OUT"
+          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+          ls -la "$DIR"
+
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: YevGallery_Compiled
-          path: android/app/build/outputs/apk/release/*.apk
+          # archive: false — качается сразу APK, без обёртки в zip (имя артефакта = имя файла)
+          archive: false
+          path: ${{ steps.rename_apk.outputs.apk }}
+          retention-days: 5
 
   cleanup:
     needs: build
